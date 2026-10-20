@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { EditorContent, useEditor } from "@tiptap/react";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
 import { yUndoPlugin } from "y-prosemirror";
 import { api, getAccessToken, refreshSession, setAccessToken } from "./api/client.js";
+import { connectDocument } from "./collab/connection.js";
 import { counts, editorExtensions, stripScripts } from "./editor/schema.js";
 import "./styles.css";
 
@@ -48,7 +51,8 @@ function App() {
       <Route path="/w/:workspaceId/starred" element={<Require session={session}><Library session={session} mode="starred" /></Require>} />
       <Route path="/w/:workspaceId/trash" element={<Require session={session}><Library session={session} mode="trash" /></Require>} />
       <Route path="/w/:workspaceId/search" element={<Require session={session}><Library session={session} mode="search" /></Require>} />
-      <Route path="/d/:documentId" element={<Require session={session}><EditorPage /></Require>} />
+      <Route path="/d/:documentId" element={<Require session={session}><EditorPage session={session} /></Require>} />
+      <Route path="/share/:token" element={<Require session={session}><RedeemPage /></Require>} />
       <Route path="/settings" element={<Require session={session}><Settings session={session} /></Require>} />
       <Route path="*" element={<p>Page not found. <Link to="/">Home</Link></p>} />
     </Routes>
@@ -230,12 +234,20 @@ function Library({ mode }) {
   );
 }
 
-function EditorPage() {
+function EditorPage({ session }) {
   const { documentId } = useParams();
-  const [state, setState] = useState(null);
-  const [status, setStatus] = useState("saved");
+  const [meta, setMeta] = useState(null);
+  const [status, setStatus] = useState("saving");
   const [error, setError] = useState("");
   const [title, setTitle] = useState("");
+  const [revoked, setRevoked] = useState(false);
+  const [note, setNote] = useState("");
+  const [peers, setPeers] = useState({});
+  const [menu, setMenu] = useState(null);
+  const [sharing, setSharing] = useState(false);
+  const linkRef = useRef(null);
+  const peersRef = useRef({});
+  const ydoc = useMemo(() => new Y.Doc(), [documentId]);
   const clientId = useMemo(() => {
     const existing = sessionStorage.getItem("collabdocs-client");
     if (existing) return existing;
@@ -244,71 +256,128 @@ function EditorPage() {
     return created;
   }, []);
   useEffect(() => {
-    api(`/api/v1/documents/${documentId}`).then((doc) => setTitle(doc.title)).catch((err) => setError(err.message));
-    api(`/api/v1/documents/${documentId}/content-state`).then(setState).catch((err) => setError(err.message));
+    api(`/api/v1/documents/${documentId}`).then((doc) => {
+      setMeta(doc);
+      setTitle(doc.title);
+    }).catch((err) => setError(err.message));
   }, [documentId]);
+  const readOnly = meta && meta.effectiveRole !== "editor" && meta.effectiveRole !== "owner";
+  useEffect(() => {
+    if (!meta) return undefined;
+    const link = connectDocument({
+      documentId,
+      clientId,
+      ydoc,
+      intent: readOnly ? "view" : "edit",
+      getToken: getAccessToken,
+      onStatus: setStatus,
+      onPresence: (peer) => {
+        peersRef.current = { ...peersRef.current, [peer.connectionId]: peer };
+        setPeers(peersRef.current);
+      },
+      onReady: (info) => setMeta((current) => ({ ...current, effectiveRole: info.role })),
+      onRevoked: () => setRevoked(true),
+      onEpoch: () => setNote("This document was restored. Reload to continue."),
+    });
+    linkRef.current = link;
+    return () => link.close();
+  }, [meta?.id, readOnly, documentId, clientId, ydoc]);
   if (error) return <p role="alert">{error}</p>;
-  if (!state) return <p role="status">Loading document</p>;
-  return <EditorSurface documentId={documentId} state={state} title={title} setTitle={setTitle} status={status} setStatus={setStatus} clientId={clientId} />;
+  if (!meta) return <p role="status">Loading document</p>;
+  if (revoked) {
+    return <p role="alert" data-testid="access-revoked">You no longer have access to this document. <Link to="/">Home</Link></p>;
+  }
+  return (
+    <EditorSurface
+      documentId={documentId} ydoc={ydoc} title={title} setTitle={setTitle} status={status}
+      readOnly={readOnly} peers={peers} peersRef={peersRef} linkRef={linkRef} menu={menu} setMenu={setMenu}
+      sharing={sharing} setSharing={setSharing} note={note} displayName={session.user?.displayName || "You"}
+    />
+  );
 }
 
-function EditorSurface({ documentId, state, title, setTitle, status, setStatus, clientId }) {
-  const ydoc = useMemo(() => {
-    const doc = new Y.Doc();
-    Y.applyUpdate(doc, decode(state.snapshotBase64), "remote");
-    for (const update of state.updates) Y.applyUpdate(doc, decode(update.payloadBase64), "remote");
-    return doc;
-  }, [documentId]);
-  const [queue, setQueue] = useState([]);
+function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, peers, peersRef, linkRef, menu, setMenu, sharing, setSharing, note, displayName }) {
   const editor = useEditor({
     extensions: editorExtensions(ydoc),
+    editable: !readOnly,
     editorProps: {
-      attributes: { "data-testid": "editor", "aria-label": "Document" },
+      attributes: { "data-testid": "editor", "aria-label": "Document", "aria-readonly": readOnly ? "true" : "false" },
       transformPastedHTML: stripScripts,
+      handleDOMEvents: {
+        dragstart(view, event) {
+          const { from, to } = view.state.selection;
+          if (from === to) return false;
+          event.dataTransfer.setData("application/x-collabdocs", JSON.stringify({ from, to }));
+          return false;
+        },
+        drop(view, event) {
+          const raw = event.dataTransfer.getData("application/x-collabdocs");
+          if (!raw) return false;
+          event.preventDefault();
+          const source = JSON.parse(raw);
+          const coords = view.posAtCoords({ left: event.clientX, top: event.clientY });
+          if (!coords) return true;
+          const text = view.state.doc.textBetween(source.from, source.to);
+          let target = coords.pos;
+          let tr = view.state.tr.delete(source.from, source.to);
+          if (target > source.to) target -= source.to - source.from;
+          tr = tr.insertText(text, Math.max(0, target));
+          view.dispatch(tr);
+          return true;
+        },
+        contextmenu(view, event) {
+          event.preventDefault();
+          setMenu({ x: event.clientX, y: event.clientY });
+          return true;
+        },
+      },
     },
-    onCreate: ({ editor: instance }) => instance.registerPlugin(yUndoPlugin()),
-  });
+    onCreate: ({ editor: instance }) => {
+      instance.registerPlugin(yUndoPlugin());
+      instance.registerPlugin(new Plugin({
+        key: new PluginKey("remote-carets"),
+        props: {
+          decorations(state) {
+            const marks = Object.values(peersRef.current).map((peer) => {
+              const pos = Math.max(0, Math.min(peer.anchor || 0, state.doc.content.size));
+              return Decoration.widget(pos, () => {
+                const caret = document.createElement("span");
+                caret.dataset.testid = "remote-caret";
+                caret.textContent = peer.displayName || "Peer";
+                caret.style.borderLeft = `2px solid ${peer.color || "#1d4e89"}`;
+                caret.style.color = peer.color || "#1d4e89";
+                return caret;
+              });
+            });
+            return DecorationSet.create(state.doc, marks);
+          },
+        },
+      }));
+    },
+  }, [readOnly, documentId]);
+  useEffect(() => { editor?.setEditable(!readOnly); }, [editor, readOnly]);
+  useEffect(() => { if (editor) editor.view.dispatch(editor.state.tr); }, [editor, peers]);
   useEffect(() => {
-    const onUpdate = (update, origin) => {
-      if (origin === "remote") return;
-      setQueue((current) => [...current, { updateId: randomId(), bytes: update }]);
-      setStatus("saving");
-    };
-    ydoc.on("update", onUpdate);
-    return () => ydoc.off("update", onUpdate);
-  }, [ydoc, setStatus]);
-  useEffect(() => {
-    if (!queue.length) return undefined;
-    const timer = setTimeout(async () => {
-      const batch = queue;
-      setQueue([]);
-      try {
-        for (const item of batch) {
-          await api(`/api/v1/documents/${documentId}/content-updates`, {
-            method: "POST",
-            body: JSON.stringify({
-              clientId, updateId: item.updateId, epoch: state.epoch, intent: "edit", payloadBase64: encode(item.bytes),
-            }),
-          });
-        }
-        setStatus("saved");
-      } catch (err) {
-        setQueue((current) => [...batch, ...current]);
-        setStatus("error");
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [queue, documentId, clientId, state.epoch, setStatus]);
+    if (!editor || readOnly) return undefined;
+    editor.on("selectionUpdate", () => {
+      const { from, to } = editor.state.selection;
+      linkRef.current?.awareness(from, to, displayName, "#1d4e89");
+    });
+    return () => editor.off("selectionUpdate");
+  }, [editor, readOnly, displayName]);
   const text = editor?.getText() || "";
   const tally = counts(text);
   return (
-    <main>
+    <main onClick={() => setMenu(null)}>
       <a className="skip" href="#editor-anchor">Skip to document</a>
       <div className="topbar">
-        <label>Title<input aria-label="Title" value={title} onChange={(event) => setTitle(event.target.value)} onBlur={() => api(`/api/v1/documents/${documentId}`, { method: "PATCH", body: JSON.stringify({ title }) })} /></label>
+        <label>Title<input aria-label="Title" value={title} disabled={readOnly} onChange={(event) => setTitle(event.target.value)} onBlur={() => api(`/api/v1/documents/${documentId}`, { method: "PATCH", body: JSON.stringify({ title }) })} /></label>
+        <button type="button" className="ghost" onClick={() => setSharing(true)}>Share</button>
+        <button type="button" className="ghost" onClick={() => findReplace(editor)} disabled={readOnly}>Find</button>
         <span className="status" data-testid="save-status" role="status">{status === "saved" ? "Saved" : status === "error" ? "Could not save. Retry" : "Saving"}</span>
-        {status === "error" && <button type="button" onClick={() => setStatus("saving")}>Retry</button>}
       </div>
+      {note && <p role="status">{note} <button type="button" onClick={() => window.location.reload()}>Reload</button></p>}
+      {readOnly && <p role="status">View only</p>}
       <div className="toolbar" role="toolbar" aria-label="Formatting">
         <Tool editor={editor} label="Bold" run={(chain) => chain.toggleBold()} active="bold" />
         <Tool editor={editor} label="Italic" run={(chain) => chain.toggleItalic()} active="italic" />
@@ -330,8 +399,78 @@ function EditorSurface({ documentId, state, title, setTitle, status, setStatus, 
       </div>
       <div id="editor-anchor"><EditorContent editor={editor} /></div>
       <p className="muted" aria-live="polite">{tally.words} words, {tally.characters} characters</p>
+      {menu && (
+        <div className="dialog" style={{ position: "fixed", left: menu.x, top: menu.y }} role="menu">
+          <Tool editor={editor} label="Bold" run={(chain) => chain.toggleBold()} />
+          <Tool editor={editor} label="Italic" run={(chain) => chain.toggleItalic()} />
+          <Tool editor={editor} label="Clear formatting" run={(chain) => chain.unsetAllMarks().clearNodes()} />
+        </div>
+      )}
+      {sharing && <ShareDialog documentId={documentId} onClose={() => setSharing(false)} />}
     </main>
   );
+}
+
+function findReplace(editor) {
+  if (!editor) return;
+  const find = window.prompt("Find");
+  if (!find) return;
+  const replace = window.prompt("Replace with", "") ?? "";
+  const ranges = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (!node.isText) return;
+    let index = node.text.indexOf(find);
+    while (index >= 0) {
+      ranges.push([pos + index, pos + index + find.length]);
+      index = node.text.indexOf(find, index + find.length);
+    }
+  });
+  let tr = editor.state.tr;
+  for (const [from, to] of ranges.reverse()) tr = tr.insertText(replace, from, to);
+  if (ranges.length) editor.view.dispatch(tr);
+}
+
+function ShareDialog({ documentId, onClose }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("editor");
+  const [items, setItems] = useState([]);
+  const [link, setLink] = useState("");
+  const [message, setMessage] = useState("");
+  const load = () => api(`/api/v1/documents/${documentId}/permissions`).then((data) => setItems(data.items));
+  useEffect(() => { load().catch((err) => setMessage(err.message)); }, [documentId]);
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <div className="dialog" role="dialog" aria-label="Share">
+        <h2>Share</h2>
+        <label>Email<input value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <label>Role<select value={role} onChange={(event) => setRole(event.target.value)}><option value="viewer">Viewer</option><option value="commenter">Commenter</option><option value="editor">Editor</option></select></label>
+        <button type="button" onClick={() => api(`/api/v1/documents/${documentId}/permissions`, { method: "POST", body: JSON.stringify({ email, role }) }).then(() => { setEmail(""); return load(); }).catch((err) => setMessage(err.message))}>Invite</button>
+        <button type="button" className="ghost" onClick={() => api(`/api/v1/documents/${documentId}/share-links`, { method: "POST", body: JSON.stringify({ role }) }).then((data) => setLink(data.url))}>Create link</button>
+        {link && <p><input aria-label="Share link" readOnly value={link} /><button type="button" onClick={() => navigator.clipboard.writeText(link)}>Copy</button></p>}
+        {items.map((item) => (
+          <div className="row" key={item.id}>
+            <span>{item.email || item.userId}</span>
+            <span>{item.role}</span>
+            {item.role !== "owner" && <button type="button" onClick={() => api(`/api/v1/documents/${documentId}/permissions/${item.id}`, { method: "DELETE" }).then(load)}>Revoke</button>}
+          </div>
+        ))}
+        {message && <p className="error">{message}</p>}
+        <button type="button" className="ghost" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+function RedeemPage() {
+  const { token } = useParams();
+  const navigate = useNavigate();
+  const [message, setMessage] = useState("Opening the shared document");
+  useEffect(() => {
+    api(`/api/v1/share-links/${token}/redeem`, { method: "POST" })
+      .then((body) => navigate(`/d/${body.documentId}`))
+      .catch((err) => setMessage(err.message));
+  }, [token, navigate]);
+  return <p role="status">{message}</p>;
 }
 
 function Tool({ editor, label, run, active }) {

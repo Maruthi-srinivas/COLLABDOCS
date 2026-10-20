@@ -127,6 +127,34 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_URL: redis://redis:6379
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: collabdocs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  collab-b:
+    build:
+      context: .
+      dockerfile: docker/collab/Dockerfile
+    environment:
+      SERVER_PORT: "8081"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379
+      JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: collabdocs
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -167,6 +195,8 @@ services:
     environment:
       PORT: "8083"
       DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN}
     depends_on:
       migrate:
@@ -192,6 +222,7 @@ services:
     depends_on:
       - api
       - collab
+      - collab-b
       - web
     networks: [collabdocs]
     restart: unless-stopped

@@ -6,6 +6,8 @@ COPY services/persistence/pom.xml services/persistence/pom.xml
 COPY services/api/pom.xml services/api/pom.xml
 COPY services/collab/pom.xml services/collab/pom.xml
 COPY services/worker/pom.xml services/worker/pom.xml
+COPY services/common/src services/common/src
+COPY services/persistence/src services/persistence/src
 COPY services/collab/src services/collab/src
 RUN mvn -f services/pom.xml -pl collab -am package -DskipTests
 
