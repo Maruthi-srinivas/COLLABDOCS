@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply Flyway migrations
+        run: |
+          docker compose up -d postgres
+          docker compose run --rm migrate
+      env:
+        POSTGRES_DB: collabdocs
+        POSTGRES_USER: collabdocs
+        POSTGRES_PASSWORD: ci-only-not-a-secret
+        MINIO_ROOT_USER: collabdocs
+        MINIO_ROOT_PASSWORD: ci-only-not-a-secret
+        INTERNAL_TOKEN: ci-only-not-a-secret
+        ALLOWED_ORIGINS: http://localhost:8080
+
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint OpenAPI
+        run: docker run --rm -v "$PWD/docs/04-api:/spec" -w /spec node:22-alpine sh -c "npx --yes @redocly/cli lint openapi.yaml --config redocly.yaml"
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose files
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml config
+        env:
+          POSTGRES_DB: collabdocs
+          POSTGRES_USER: collabdocs
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          MINIO_ROOT_USER: collabdocs
+          MINIO_ROOT_PASSWORD: ci-only-not-a-secret
+          INTERNAL_TOKEN: ci-only-not-a-secret
+          ALLOWED_ORIGINS: http://localhost:8080

@@ -1,0 +1,1998 @@
+openapi: 3.0.3
+info:
+  title: CollabDocs API
+  version: 1.0.0
+  description: |
+    Public REST API for CollabDocs. WebSocket collaboration is specified in
+    COLLABORATION_PROTOCOL.md and is not part of this file.
+    Narrative contract: API_SPECIFICATION.md.
+  license:
+    name: Proprietary
+servers:
+  - url: /api/v1
+tags:
+  - name: Auth
+  - name: Profile
+  - name: Workspaces
+  - name: Folders
+  - name: Documents
+  - name: Sharing
+  - name: Comments
+  - name: Suggestions
+  - name: Versions
+  - name: Transfer
+  - name: Notifications
+  - name: Templates
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refresh
+      security: []
+      responses:
+        "200":
+          description: Access token rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessTokenResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      responses:
+        "204":
+          description: Logged out
+  /auth/logout-all:
+    post:
+      tags: [Auth]
+      operationId: logoutAll
+      responses:
+        "204":
+          description: All sessions revoked
+  /auth/verify-email:
+    post:
+      tags: [Auth]
+      operationId: verifyEmail
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        "200":
+          description: Verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+        "400":
+          $ref: "#/components/responses/Error"
+  /auth/verify-email/resend:
+    post:
+      tags: [Auth]
+      operationId: resendVerification
+      responses:
+        "202":
+          description: Sent
+        "429":
+          $ref: "#/components/responses/Error"
+  /auth/password/forgot:
+    post:
+      tags: [Auth]
+      operationId: forgotPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "202":
+          description: Accepted
+  /auth/password/reset:
+    post:
+      tags: [Auth]
+      operationId: resetPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                password:
+                  type: string
+                  minLength: 12
+                  maxLength: 128
+      responses:
+        "204":
+          description: Password updated
+        "400":
+          $ref: "#/components/responses/Error"
+  /auth/sessions:
+    get:
+      tags: [Auth]
+      operationId: listSessions
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SessionInfo"
+  /auth/sessions/{sessionId}:
+    delete:
+      tags: [Auth]
+      operationId: revokeSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "204":
+          description: Revoked
+        "404":
+          $ref: "#/components/responses/Error"
+  /me:
+    get:
+      tags: [Profile]
+      operationId: getMe
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+    patch:
+      tags: [Profile]
+      operationId: updateMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+    delete:
+      tags: [Profile]
+      operationId: deleteMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, confirmation]
+              properties:
+                password:
+                  type: string
+                confirmation:
+                  type: string
+                  enum: ["DELETE"]
+      responses:
+        "202":
+          description: Deletion scheduled
+        "409":
+          $ref: "#/components/responses/Error"
+  /me/avatar:
+    post:
+      tags: [Profile]
+      operationId: uploadAvatar
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Uploaded
+        "400":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Profile]
+      operationId: deleteAvatar
+      responses:
+        "204":
+          description: Removed
+  /users/search:
+    get:
+      tags: [Profile]
+      operationId: searchUsers
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+      responses:
+        "200":
+          description: Matches
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserPublic"
+  /workspaces:
+    get:
+      tags: [Workspaces]
+      operationId: listWorkspaces
+      responses:
+        "200":
+          description: Workspaces
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Workspace"
+    post:
+      tags: [Workspaces]
+      operationId: createWorkspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        "403":
+          $ref: "#/components/responses/Error"
+  /workspaces/{workspaceId}:
+    get:
+      tags: [Workspaces]
+      operationId: getWorkspace
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+    patch:
+      tags: [Workspaces]
+      operationId: updateWorkspace
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkspacePatch"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+  /workspaces/{workspaceId}/members:
+    get:
+      tags: [Workspaces]
+      operationId: listMembers
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Members
+    post:
+      tags: [Workspaces]
+      operationId: addMember
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email:
+                  type: string
+                  format: email
+                role:
+                  $ref: "#/components/schemas/WorkspaceRole"
+      responses:
+        "201":
+          description: Added
+  /workspaces/{workspaceId}/members/{userId}:
+    patch:
+      tags: [Workspaces]
+      operationId: updateMember
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  $ref: "#/components/schemas/WorkspaceRole"
+      responses:
+        "200":
+          description: Updated
+    delete:
+      tags: [Workspaces]
+      operationId: removeMember
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "204":
+          description: Removed
+  /workspaces/{workspaceId}/folders:
+    get:
+      tags: [Folders]
+      operationId: listFolders
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - in: query
+          name: parentId
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Folders
+    post:
+      tags: [Folders]
+      operationId: createFolder
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderCreate"
+      responses:
+        "201":
+          description: Created
+        "422":
+          $ref: "#/components/responses/Error"
+  /folders/{folderId}:
+    patch:
+      tags: [Folders]
+      operationId: updateFolder
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FolderCreate"
+      responses:
+        "200":
+          description: Updated
+    delete:
+      tags: [Folders]
+      operationId: trashFolder
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      responses:
+        "200":
+          description: Trashed
+  /folders/{folderId}/restore:
+    post:
+      tags: [Folders]
+      operationId: restoreFolder
+      parameters:
+        - $ref: "#/components/parameters/FolderId"
+      responses:
+        "200":
+          description: Restored
+  /workspaces/{workspaceId}/documents:
+    get:
+      tags: [Documents]
+      operationId: listDocuments
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - in: query
+          name: folderId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [updatedAt, title, createdAt]
+        - in: query
+          name: direction
+          schema:
+            type: string
+            enum: [asc, desc]
+      responses:
+        "200":
+          description: Documents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentPage"
+    post:
+      tags: [Documents]
+      operationId: createDocument
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentCreate"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+  /workspaces/{workspaceId}/documents/recent:
+    get:
+      tags: [Documents]
+      operationId: recentDocuments
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: Recent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentPage"
+  /workspaces/{workspaceId}/documents/starred:
+    get:
+      tags: [Documents]
+      operationId: starredDocuments
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Starred
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentPage"
+  /workspaces/{workspaceId}/documents/from-template:
+    post:
+      tags: [Documents]
+      operationId: createFromTemplate
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [templateId]
+              properties:
+                templateId:
+                  type: string
+                  format: uuid
+                folderId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                title:
+                  type: string
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+  /workspaces/{workspaceId}/trash:
+    get:
+      tags: [Documents]
+      operationId: listTrash
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      responses:
+        "200":
+          description: Trash
+  /workspaces/{workspaceId}/search:
+    get:
+      tags: [Documents]
+      operationId: searchDocuments
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+        - in: query
+          name: q
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentPage"
+  /documents/{documentId}:
+    get:
+      tags: [Documents]
+      operationId: getDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "200":
+          description: Document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "404":
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [Documents]
+      operationId: renameDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - in: header
+          name: If-Match
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+      responses:
+        "200":
+          description: Renamed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "409":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Documents]
+      operationId: trashDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "200":
+          description: Trashed
+  /documents/{documentId}/duplicate:
+    post:
+      tags: [Documents]
+      operationId: duplicateDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspaceId]
+              properties:
+                workspaceId:
+                  type: string
+                  format: uuid
+                folderId:
+                  type: string
+                  format: uuid
+                  nullable: true
+                title:
+                  type: string
+      responses:
+        "201":
+          description: Duplicate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+  /documents/{documentId}/move:
+    post:
+      tags: [Documents]
+      operationId: moveDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                folderId:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        "200":
+          description: Moved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+  /documents/{documentId}/restore:
+    post:
+      tags: [Documents]
+      operationId: restoreDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "200":
+          description: Restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+  /documents/{documentId}/purge:
+    delete:
+      tags: [Documents]
+      operationId: purgeDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "204":
+          description: Purged
+  /documents/{documentId}/star:
+    post:
+      tags: [Documents]
+      operationId: starDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "204":
+          description: Starred
+    delete:
+      tags: [Documents]
+      operationId: unstarDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "204":
+          description: Unstarred
+  /documents/{documentId}/content-updates:
+    post:
+      tags: [Documents]
+      operationId: appendContentUpdate
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContentUpdate"
+      responses:
+        "200":
+          description: Ack
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentAck"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+  /documents/{documentId}/content-state:
+    get:
+      tags: [Documents]
+      operationId: getContentState
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - in: query
+          name: sinceSeq
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Snapshot and tail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentState"
+  /documents/{documentId}/permissions:
+    get:
+      tags: [Sharing]
+      operationId: listPermissions
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "200":
+          description: Grants
+    post:
+      tags: [Sharing]
+      operationId: createPermission
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PermissionCreate"
+      responses:
+        "201":
+          description: Granted
+  /documents/{documentId}/permissions/{permissionId}:
+    patch:
+      tags: [Sharing]
+      operationId: updatePermission
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/PermissionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  $ref: "#/components/schemas/ShareRole"
+      responses:
+        "200":
+          description: Updated
+    delete:
+      tags: [Sharing]
+      operationId: revokePermission
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/PermissionId"
+      responses:
+        "204":
+          description: Revoked
+  /documents/{documentId}/transfer-ownership:
+    post:
+      tags: [Sharing]
+      operationId: transferOwnership
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Transferred
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+  /documents/{documentId}/share-links:
+    get:
+      tags: [Sharing]
+      operationId: listShareLinks
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "200":
+          description: Links
+    post:
+      tags: [Sharing]
+      operationId: createShareLink
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  $ref: "#/components/schemas/ShareRole"
+                expiresAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        "201":
+          description: Created. Token is present once.
+  /share-links/{linkId}:
+    delete:
+      tags: [Sharing]
+      operationId: revokeShareLink
+      parameters:
+        - in: path
+          name: linkId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Revoked
+  /share-links/{token}/redeem:
+    post:
+      tags: [Sharing]
+      operationId: redeemShareLink
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Redeemed
+        "410":
+          $ref: "#/components/responses/Error"
+  /documents/{documentId}/access-requests:
+    post:
+      tags: [Sharing]
+      operationId: requestAccess
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "201":
+          description: Requested
+        "200":
+          description: Existing open request
+  /access-requests/{requestId}/approve:
+    post:
+      tags: [Sharing]
+      operationId: approveAccess
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  $ref: "#/components/schemas/ShareRole"
+      responses:
+        "200":
+          description: Approved
+  /access-requests/{requestId}/deny:
+    post:
+      tags: [Sharing]
+      operationId: denyAccess
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Denied
+  /documents/{documentId}/threads:
+    get:
+      tags: [Comments]
+      operationId: listThreads
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [open, resolved]
+      responses:
+        "200":
+          description: Threads
+    post:
+      tags: [Comments]
+      operationId: createThread
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ThreadCreate"
+      responses:
+        "201":
+          description: Created
+  /threads/{threadId}:
+    patch:
+      tags: [Comments]
+      operationId: updateThreadAnchor
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [anchorState]
+              properties:
+                anchorState:
+                  type: string
+                  enum: [bound, detached]
+      responses:
+        "200":
+          description: Updated
+  /threads/{threadId}/comments:
+    post:
+      tags: [Comments]
+      operationId: replyThread
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 5000
+                mentionUserIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+      responses:
+        "201":
+          description: Reply stored
+  /threads/{threadId}/resolve:
+    post:
+      tags: [Comments]
+      operationId: resolveThread
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: Resolved
+  /threads/{threadId}/reopen:
+    post:
+      tags: [Comments]
+      operationId: reopenThread
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: Reopened
+  /comments/{commentId}:
+    patch:
+      tags: [Comments]
+      operationId: editComment
+      parameters:
+        - $ref: "#/components/parameters/CommentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body:
+                  type: string
+      responses:
+        "200":
+          description: Edited
+        "409":
+          $ref: "#/components/responses/Error"
+    delete:
+      tags: [Comments]
+      operationId: deleteComment
+      parameters:
+        - $ref: "#/components/parameters/CommentId"
+      responses:
+        "204":
+          description: Deleted
+  /documents/{documentId}/suggestions:
+    get:
+      tags: [Suggestions]
+      operationId: listSuggestions
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, accepted, rejected]
+      responses:
+        "200":
+          description: Suggestions
+    post:
+      tags: [Suggestions]
+      operationId: registerSuggestion
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, type]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                type:
+                  type: string
+                  enum: [insert, delete, format]
+      responses:
+        "201":
+          description: Registered
+        "200":
+          description: Already registered
+  /documents/{documentId}/suggestions/{suggestionId}/accept:
+    post:
+      tags: [Suggestions]
+      operationId: acceptSuggestion
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/SuggestionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContentUpdate"
+      responses:
+        "200":
+          description: Accepted
+        "409":
+          $ref: "#/components/responses/Error"
+  /documents/{documentId}/suggestions/{suggestionId}/reject:
+    post:
+      tags: [Suggestions]
+      operationId: rejectSuggestion
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/SuggestionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContentUpdate"
+      responses:
+        "200":
+          description: Rejected
+  /documents/{documentId}/suggestions/accept-all:
+    post:
+      tags: [Suggestions]
+      operationId: acceptAllSuggestions
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuggestionBatch"
+      responses:
+        "200":
+          description: Accepted
+  /documents/{documentId}/suggestions/reject-all:
+    post:
+      tags: [Suggestions]
+      operationId: rejectAllSuggestions
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuggestionBatch"
+      responses:
+        "200":
+          description: Rejected
+  /documents/{documentId}/versions:
+    get:
+      tags: [Versions]
+      operationId: listVersions
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "200":
+          description: Versions
+    post:
+      tags: [Versions]
+      operationId: nameVersion
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+      responses:
+        "201":
+          description: Named
+        "202":
+          description: Compaction pending
+  /documents/{documentId}/versions/compare:
+    get:
+      tags: [Versions]
+      operationId: compareVersions
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - in: query
+          name: from
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: to
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Paragraph diff
+  /documents/{documentId}/versions/{versionId}:
+    get:
+      tags: [Versions]
+      operationId: getVersion
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/VersionId"
+      responses:
+        "200":
+          description: Version
+    delete:
+      tags: [Versions]
+      operationId: deleteNamedVersion
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/VersionId"
+      responses:
+        "204":
+          description: Label removed
+  /documents/{documentId}/versions/{versionId}/preview:
+    get:
+      tags: [Versions]
+      operationId: previewVersion
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/VersionId"
+      responses:
+        "200":
+          description: HTML fragment
+          content:
+            text/html:
+              schema:
+                type: string
+        "202":
+          description: Rendering
+  /documents/{documentId}/versions/{versionId}/restore:
+    post:
+      tags: [Versions]
+      operationId: restoreVersion
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/VersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm:
+                  type: boolean
+      responses:
+        "200":
+          description: Restored
+        "400":
+          $ref: "#/components/responses/Error"
+  /workspaces/{workspaceId}/imports:
+    post:
+      tags: [Transfer]
+      operationId: createImport
+      parameters:
+        - $ref: "#/components/parameters/WorkspaceId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, format]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                format:
+                  type: string
+                  enum: [docx, html]
+                folderId:
+                  type: string
+                  format: uuid
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+  /imports/{jobId}:
+    get:
+      tags: [Transfer]
+      operationId: getImport
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Import job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+  /documents/{documentId}/exports:
+    post:
+      tags: [Transfer]
+      operationId: createExport
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - in: header
+          name: Idempotency-Key
+          schema:
+            type: string
+            maxLength: 100
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [format]
+              properties:
+                format:
+                  type: string
+                  enum: [pdf, docx, html, txt]
+                includeSuggestions:
+                  type: boolean
+                  default: false
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "200":
+          description: Existing job for this idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+  /exports/{jobId}:
+    get:
+      tags: [Transfer]
+      operationId: getExport
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Export job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+  /exports/{jobId}/download:
+    get:
+      tags: [Transfer]
+      operationId: downloadExport
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: File
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "409":
+          $ref: "#/components/responses/Error"
+  /documents/{documentId}/attachments:
+    post:
+      tags: [Transfer]
+      operationId: uploadAttachment
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                altText:
+                  type: string
+                decorative:
+                  type: boolean
+      responses:
+        "201":
+          description: Stored
+  /documents/{documentId}/attachments/{attachmentId}:
+    get:
+      tags: [Transfer]
+      operationId: getAttachment
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/AttachmentId"
+      responses:
+        "200":
+          description: Bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+    delete:
+      tags: [Transfer]
+      operationId: deleteAttachment
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/AttachmentId"
+      responses:
+        "204":
+          description: Deleted
+  /notifications:
+    get:
+      tags: [Notifications]
+      operationId: listNotifications
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - in: query
+          name: unread
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Notifications
+  /notifications/{notificationId}/read:
+    post:
+      tags: [Notifications]
+      operationId: readNotification
+      parameters:
+        - in: path
+          name: notificationId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Marked
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      operationId: readAllNotifications
+      responses:
+        "204":
+          description: Marked
+  /templates:
+    get:
+      tags: [Templates]
+      operationId: listTemplates
+      parameters:
+        - in: query
+          name: workspaceId
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Templates
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    WorkspaceId:
+      in: path
+      name: workspaceId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DocumentId:
+      in: path
+      name: documentId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    FolderId:
+      in: path
+      name: folderId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      in: path
+      name: userId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SessionId:
+      in: path
+      name: sessionId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PermissionId:
+      in: path
+      name: permissionId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ThreadId:
+      in: path
+      name: threadId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CommentId:
+      in: path
+      name: commentId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SuggestionId:
+      in: path
+      name: suggestionId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    VersionId:
+      in: path
+      name: versionId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    JobId:
+      in: path
+      name: jobId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    AttachmentId:
+      in: path
+      name: attachmentId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RequestId:
+      in: path
+      name: requestId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      in: query
+      name: limit
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
+    Cursor:
+      in: query
+      name: cursor
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            correlationId:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string
+    RegisterRequest:
+      type: object
+      required: [email, displayName, password]
+      properties:
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    SessionResponse:
+      type: object
+      required: [accessToken, expiresIn, user]
+      properties:
+        accessToken:
+          type: string
+        expiresIn:
+          type: integer
+          example: 900
+        user:
+          $ref: "#/components/schemas/Me"
+        workspace:
+          $ref: "#/components/schemas/Workspace"
+    AccessTokenResponse:
+      type: object
+      required: [accessToken, expiresIn]
+      properties:
+        accessToken:
+          type: string
+        expiresIn:
+          type: integer
+    Me:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
+        emailVerified:
+          type: boolean
+        status:
+          type: string
+        avatarUrl:
+          type: string
+          nullable: true
+    UserPublic:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        email:
+          type: string
+    SessionInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        lastUsedAt:
+          type: string
+          format: date-time
+        userAgent:
+          type: string
+        ipPrefix:
+          type: string
+        current:
+          type: boolean
+    WorkspaceRole:
+      type: string
+      enum: [owner, admin, member, guest]
+    Workspace:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/WorkspaceRole"
+        linkSharing:
+          type: string
+          enum: [disabled, enabled_commenter_max, allow_editor_links]
+    WorkspacePatch:
+      type: object
+      properties:
+        name:
+          type: string
+        linkSharing:
+          type: string
+          enum: [disabled, enabled_commenter_max, allow_editor_links]
+    FolderCreate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        parentId:
+          type: string
+          format: uuid
+          nullable: true
+    DocumentRole:
+      type: string
+      enum: [viewer, commenter, editor, owner]
+    ShareRole:
+      type: string
+      enum: [viewer, commenter, editor]
+    Document:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspaceId:
+          type: string
+          format: uuid
+        folderId:
+          type: string
+          format: uuid
+          nullable: true
+        ownerId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+          enum: [active, trashed, purged]
+        epoch:
+          type: integer
+        schemaVersion:
+          type: integer
+        wordCount:
+          type: integer
+        effectiveRole:
+          $ref: "#/components/schemas/DocumentRole"
+        starred:
+          type: boolean
+        version:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        lastEditedAt:
+          type: string
+          format: date-time
+          nullable: true
+    DocumentPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Document"
+        nextCursor:
+          type: string
+          nullable: true
+    DocumentCreate:
+      type: object
+      properties:
+        title:
+          type: string
+        folderId:
+          type: string
+          format: uuid
+          nullable: true
+        templateId:
+          type: string
+          format: uuid
+          nullable: true
+    ContentUpdate:
+      type: object
+      required: [clientId, updateId, epoch, intent, payloadBase64]
+      properties:
+        clientId:
+          type: string
+          format: uuid
+        updateId:
+          type: string
+          format: uuid
+        epoch:
+          type: integer
+        intent:
+          type: string
+          enum: [edit, suggest]
+        payloadBase64:
+          type: string
+    ContentAck:
+      type: object
+      properties:
+        epoch:
+          type: integer
+        seq:
+          type: integer
+          format: int64
+        duplicate:
+          type: boolean
+    ContentState:
+      type: object
+      properties:
+        epoch:
+          type: integer
+        schemaVersion:
+          type: integer
+        snapshotBase64:
+          type: string
+        throughSeq:
+          type: integer
+          format: int64
+        updates:
+          type: array
+          items:
+            type: object
+            properties:
+              seq:
+                type: integer
+                format: int64
+              payloadBase64:
+                type: string
+    PermissionCreate:
+      type: object
+      required: [role]
+      properties:
+        userId:
+          type: string
+          format: uuid
+          nullable: true
+        email:
+          type: string
+          format: email
+          nullable: true
+        role:
+          $ref: "#/components/schemas/ShareRole"
+    ThreadCreate:
+      type: object
+      required: [body, quotedText, anchorStartBase64, anchorEndBase64]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        quotedText:
+          type: string
+          maxLength: 500
+        anchorStartBase64:
+          type: string
+        anchorEndBase64:
+          type: string
+        mentionUserIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    SuggestionBatch:
+      type: object
+      required: [updates]
+      properties:
+        updates:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/ContentUpdate"
+              - type: object
+                required: [suggestionId]
+                properties:
+                  suggestionId:
+                    type: string
+                    format: uuid
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed]
+        documentId:
+          type: string
+          format: uuid
+          nullable: true
+        format:
+          type: string
+        errorCode:
+          type: string
+          nullable: true
+        report:
+          type: object
+          additionalProperties: true
+          nullable: true
+security:
+  - bearerAuth: []

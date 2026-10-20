@@ -1,0 +1,197 @@
+name: collabdocs
+
+networks:
+  collabdocs:
+    name: collabdocs
+
+volumes:
+  pgdata:
+  miniodata:
+  web_node_modules:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" && mc mb -p local/collabdocs || true
+    networks: [collabdocs]
+    restart: "no"
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  migrate:
+    image: flyway/flyway:10.22-alpine
+    command: ["-url=jdbc:postgresql://postgres:5432/${POSTGRES_DB}", "-user=${POSTGRES_USER}", "-password=${POSTGRES_PASSWORD}", "-locations=filesystem:/flyway/sql", "-connectRetries=20", "migrate"]
+    volumes:
+      - ./db/migration:/flyway/sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [collabdocs]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    environment:
+      SERVER_PORT: "8080"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM}
+      JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM}
+      MAIL_HOST: mailpit
+      MAIL_PORT: "1025"
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: collabdocs
+      APP_PUBLIC_URL: http://localhost:8080
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  collab:
+    build:
+      context: .
+      dockerfile: docker/collab/Dockerfile
+    environment:
+      SERVER_PORT: "8081"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    environment:
+      SERVER_PORT: "8082"
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://redis:6379
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: collabdocs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  compactor:
+    build:
+      context: .
+      dockerfile: docker/compactor/Dockerfile
+    environment:
+      PORT: "8083"
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile.dev
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+    networks: [collabdocs]
+    restart: unless-stopped
+
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+      - collab
+      - web
+    networks: [collabdocs]
+    restart: unless-stopped

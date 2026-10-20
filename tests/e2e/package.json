@@ -1,0 +1,8 @@
+{
+  "name": "collabdocs-e2e",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@playwright/test": "^1.49.1"
+  }
+}

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.collabdocs</groupId>
+    <artifactId>collabdocs</artifactId>
+    <version>0.1.0</version>
+  </parent>
+  <artifactId>collabdocs-persistence</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>com.collabdocs</groupId>
+      <artifactId>collabdocs-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.minio</groupId>
+      <artifactId>minio</artifactId>
+      <version>8.5.17</version>
+    </dependency>
+  </dependencies>
+</project>

@@ -1,0 +1,9 @@
+.git
+.github
+docs
+**/.env
+**/node_modules
+**/target
+agent-transcripts
+*.md
+!services/**/README.md
