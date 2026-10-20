@@ -1,5 +1,19 @@
 {
   "name": "collabdocs-compactor",
   "private": true,
-  "type": "commonjs"
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test compact.test.js"
+  },
+  "dependencies": {
+    "@tiptap/core": "^2.11.5",
+    "@tiptap/extension-link": "^2.11.5",
+    "@tiptap/extension-text-align": "^2.11.5",
+    "@tiptap/extension-underline": "^2.11.5",
+    "@tiptap/starter-kit": "^2.11.5",
+    "pg": "^8.13.1",
+    "y-prosemirror": "^1.2.15",
+    "yjs": "^13.6.23"
+  }
 }

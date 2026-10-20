@@ -63,6 +63,13 @@ public class AuthService {
                 workspaceId, displayName.trim() + "'s Workspace", userId);
         jdbc.update("INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES (?, ?, 'owner')",
                 workspaceId, userId);
+        jdbc.update(
+                """
+                UPDATE document_permissions
+                SET principal_type = 'user', user_id = ?, email = NULL
+                WHERE principal_type = 'email_invite' AND email = ? AND revoked_at IS NULL
+                """,
+                userId, normalized);
         sendToken(userId, normalized, "verify_email", "Verify your CollabDocs email",
                 publicUrl + "/verify-email?token=");
         return issue(userId, false, userAgent, ip, true);
