@@ -4,13 +4,17 @@ import Link from "@tiptap/extension-link";
 import TextAlign from "@tiptap/extension-text-align";
 import Collaboration from "@tiptap/extension-collaboration";
 import { suggestionMarks } from "./marks.js";
+import { layoutNodes } from "./nodes.js";
 
-export function editorExtensions(ydoc) {
+export const SCHEMA_VERSION = 2;
+
+export function editorExtensions(ydoc, documentId) {
   return [
     StarterKit.configure({ history: !ydoc }),
     Underline,
     Link.configure({ openOnClick: false, autolink: false, protocols: ["http", "https", "mailto"] }),
-    TextAlign.configure({ types: ["heading", "paragraph"] }),
+    TextAlign.configure({ types: ["heading", "paragraph", "tableCell", "tableHeader"] }),
+    ...layoutNodes(documentId),
     ...suggestionMarks(),
     ...(ydoc ? [Collaboration.configure({ document: ydoc, field: "prosemirror" })] : []),
   ];

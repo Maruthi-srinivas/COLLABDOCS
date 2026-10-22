@@ -181,6 +181,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: collabdocs
+      COMPACTOR_URL: http://compactor:8083
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -188,6 +189,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      compactor:
+        condition: service_started
     networks: [collabdocs]
     restart: unless-stopped
 

@@ -10,6 +10,7 @@ import { ySyncPluginKey, yUndoPlugin } from "y-prosemirror";
 import { api, getAccessToken, refreshSession, setAccessToken } from "./api/client.js";
 import { connectDocument } from "./collab/connection.js";
 import { counts, editorExtensions, stripScripts } from "./editor/schema.js";
+import { ExportPanel, LayoutTools, Outline, SettingsLoader, uploadPastedImage } from "./editor/extras.jsx";
 import { CommentPanel } from "./comments/panel.jsx";
 import { suggestionExtension } from "./suggestions/plugin.js";
 import { SuggestionPanel } from "./suggestions/panel.jsx";
@@ -179,11 +180,49 @@ function Shell({ workspaceId, children }) {
         <form className="topbar" onSubmit={(event) => { event.preventDefault(); navigate(`/w/${workspaceId}/search?q=${encodeURIComponent(query)}`); }}>
           <label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           <button type="submit">Search</button>
+          <ThemeToggle />
           <NotificationBell />
         </form>
         <div id="content">{children}</div>
       </div>
     </div>
+  );
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState(() => localStorage.getItem("collabdocs-theme") || "light");
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("collabdocs-theme", theme);
+  }, [theme]);
+  return <button type="button" className="ghost" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? "Light theme" : "Dark theme"}</button>;
+}
+
+function TemplateButton({ workspaceId, folderId }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    if (!open) return;
+    api(`/api/v1/templates?workspaceId=${workspaceId}`).then((data) => setItems(data.items || [])).catch(() => {});
+  }, [open, workspaceId]);
+  return (
+    <>
+      <button type="button" className="ghost" onClick={() => setOpen(true)}>From template</button>
+      {open && (
+        <div className="dialog-backdrop">
+          <div className="dialog stack" role="dialog" aria-label="Templates">
+            <h2>Templates</h2>
+            {items.map((item) => (
+              <button type="button" key={item.id} onClick={() => api(`/api/v1/workspaces/${workspaceId}/documents/from-template`, {
+                method: "POST",
+                body: JSON.stringify({ templateId: item.id, folderId: folderId || null, title: item.name }),
+              }).then((created) => { window.location.assign(`/d/${created.id}`); })}>{item.name}</button>
+            ))}
+            <button type="button" className="ghost" onClick={() => setOpen(false)}>Close</button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -239,6 +278,7 @@ function Library({ mode }) {
       <div className="topbar">
         <h1>{mode === "trash" ? "Trash" : mode === "starred" ? "Starred" : mode === "search" ? "Search" : folderId ? "Folder" : "Recent"}</h1>
         {!mode && <button type="button" onClick={createDocument}>New document</button>}
+        {!mode && <TemplateButton workspaceId={workspaceId} folderId={folderId} />}
         {!mode && <button type="button" className="ghost" onClick={createFolder}>New folder</button>}
       </div>
       {!items.length && <p>{mode === "trash" ? "Trash is empty" : "No documents in this folder"}</p>}
@@ -350,11 +390,14 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
   readOnlyRef.current = readOnly;
   const selectable = !readOnly || canSuggest;
   const [history, setHistory] = useState(false);
+  const [imageMessage, setImageMessage] = useState("");
+  const imageErrorRef = useRef(setImageMessage);
+  imageErrorRef.current = setImageMessage;
   const editor = useEditor({
-    extensions: [...editorExtensions(ydoc), suggestion],
+    extensions: [...editorExtensions(ydoc, documentId), suggestion],
     editable: selectable,
     editorProps: {
-      attributes: { "data-testid": "editor", "aria-label": "Document", "aria-readonly": readOnly ? "true" : "false" },
+      attributes: { "data-testid": "editor", role: "textbox", "aria-multiline": "true", "aria-label": "Document", "aria-readonly": readOnly ? "true" : "false" },
       transformPastedHTML: stripScripts,
       handleDOMEvents: {
         dragstart(view, event) {
@@ -362,6 +405,18 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
           if (from === to) return false;
           event.dataTransfer.setData("application/x-collabdocs", JSON.stringify({ from, to }));
           return false;
+        },
+        paste(view, event) {
+          const image = [...(event.clipboardData?.items || [])].find((item) => item.type.startsWith("image/"));
+          if (!image || readOnly) return false;
+          const file = image.getAsFile();
+          if (!file) return false;
+          event.preventDefault();
+          uploadPastedImage(documentId, file).then((created) => {
+            const node = view.state.schema.nodes.image.create({ attachmentId: created.id, alt: "Pasted image", decorative: false });
+            view.dispatch(view.state.tr.replaceSelectionWith(node));
+          }).catch(() => imageErrorRef.current("The image could not be added."));
+          return true;
         },
         drop(view, event) {
           const raw = event.dataTransfer.getData("application/x-collabdocs");
@@ -434,6 +489,7 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
         <label>Title<input aria-label="Title" value={title} disabled={readOnly} onChange={(event) => setTitle(event.target.value)} onBlur={() => api(`/api/v1/documents/${documentId}`, { method: "PATCH", body: JSON.stringify({ title }) })} /></label>
         <button type="button" className="ghost" onClick={() => setSharing(true)}>Share</button>
         <button type="button" className="ghost" onClick={() => setHistory((value) => !value)}>History</button>
+        <ThemeToggle />
         {canSuggest && (
           <div role="group" aria-label="Editing mode">
             <button type="button" aria-pressed={mode !== "suggest"} onClick={() => setMode("edit")}>Editing</button>
@@ -463,14 +519,21 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
           return chain.setLink({ href });
         }} />
         <Tool editor={editor} label="Clear formatting" run={(chain) => chain.unsetAllMarks().clearNodes()} />
+        <LayoutTools editor={editor} documentId={documentId} readOnly={readOnly} onError={setImageMessage} />
       </div>
+      {imageMessage && <p className="error" role="alert">{imageMessage}</p>}
       <div className="editor-layout">
+        <Outline editor={editor} />
         <div>
           <div id="editor-anchor"><EditorContent editor={editor} /></div>
           <p className="muted" aria-live="polite">{tally.accepted.words} words, {tally.accepted.characters} characters{mode === "suggest" ? ` (${tally.suggested.words} including suggestions)` : ""}</p>
           <SuggestionPanel documentId={documentId} editor={editor} ydoc={ydoc} linkRef={linkRef} canResolve={canEdit} clientId={clientId} epoch={epoch} />
         </div>
-        <CommentPanel documentId={documentId} editor={editor} ydoc={ydoc} canComment={canSuggest} refreshKey={commentKey} />
+        <div className="side-stack">
+          <SettingsLoader documentId={documentId} />
+          <ExportPanel documentId={documentId} />
+          <CommentPanel documentId={documentId} editor={editor} ydoc={ydoc} canComment={canSuggest} refreshKey={commentKey} />
+        </div>
       </div>
       {menu && (
         <div className="dialog" style={{ position: "fixed", left: menu.x, top: menu.y }} role="menu">

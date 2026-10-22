@@ -70,7 +70,7 @@ export async function compactDocument(client, documentId, force) {
     `INSERT INTO document_snapshots
       (id, document_id, epoch, through_seq, schema_version, kind, byte_size, state)
      VALUES ($1, $2, $3, $4, $5, 'automatic', $6, $7)`,
-    [snapshotId, row.document_id, row.epoch, row.last_seq, row.schema_version, compacted.state.length, compacted.state],
+    [snapshotId, row.document_id, row.epoch, row.last_seq, Math.max(Number(row.schema_version) || 1, 2), compacted.state.length, compacted.state],
   );
   await client.query(
     `INSERT INTO document_versions (id, document_id, snapshot_id, kind)
@@ -82,7 +82,7 @@ export async function compactDocument(client, documentId, force) {
     [row.document_id, row.epoch, row.last_seq],
   );
   await client.query(
-    `UPDATE documents SET word_count = $2, compaction_status = 'ok', updated_at = now() WHERE id = $1`,
+    `UPDATE documents SET word_count = $2, schema_version = GREATEST(schema_version, 2), compaction_status = 'ok', updated_at = now() WHERE id = $1`,
     [row.document_id, compacted.wordCount],
   );
   failures.delete(String(row.document_id));

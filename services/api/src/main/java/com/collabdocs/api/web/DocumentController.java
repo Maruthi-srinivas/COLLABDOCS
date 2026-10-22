@@ -82,7 +82,18 @@ public class DocumentController {
                                                 @RequestBody(required = false) Map<String, Object> body) {
         Map<String, Object> payload = body == null ? Map.of() : body;
         return ResponseEntity.status(HttpStatus.CREATED).body(documents.create(
-                AuthController.current(request).userId(), workspaceId, string(payload.get("title")), uuid(payload.get("folderId"))));
+                AuthController.current(request).userId(), workspaceId, string(payload.get("title")),
+                uuid(payload.get("folderId")), uuid(payload.get("templateId"))));
+    }
+
+    @PostMapping("/api/v1/workspaces/{workspaceId}/documents/from-template")
+    ResponseEntity<Map<String, Object>> fromTemplate(HttpServletRequest request, @PathVariable UUID workspaceId,
+                                                      @RequestBody Map<String, Object> body) {
+        UUID templateId = uuid(body.get("templateId"));
+        if (templateId == null) throw new ApiException(400, "VALIDATION_FAILED", "Choose a template.");
+        return ResponseEntity.status(HttpStatus.CREATED).body(documents.create(
+                AuthController.current(request).userId(), workspaceId, string(body.get("title")),
+                uuid(body.get("folderId")), templateId));
     }
 
     @GetMapping("/api/v1/workspaces/{workspaceId}/documents/recent")
@@ -113,8 +124,8 @@ public class DocumentController {
     @PatchMapping("/api/v1/documents/{documentId}")
     Map<String, Object> rename(HttpServletRequest request, @PathVariable UUID documentId,
                                @RequestHeader(value = "If-Match", required = false) String ifMatch,
-                               @RequestBody Map<String, String> body) {
-        return documents.rename(AuthController.current(request).userId(), documentId, body.get("title"), ifMatch);
+                               @RequestBody Map<String, Object> body) {
+        return documents.update(AuthController.current(request).userId(), documentId, body, ifMatch);
     }
 
     @PostMapping("/api/v1/documents/{documentId}/move")

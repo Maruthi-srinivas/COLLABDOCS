@@ -57,6 +57,34 @@ test("accepted projection hides inserts and keeps deletes and current marks", ()
   assert.match(JSON.stringify(projected.canonicalJson), /"type":"bold"/);
 });
 
+test("a table stays in canonical JSON and an image projects as a placeholder", () => {
+  const schema = getSchema(schemaExtensions());
+  const doc = prosemirrorJSONToYDoc(schema, {
+    type: "doc",
+    content: [
+      {
+        type: "table",
+        content: [{
+          type: "tableRow",
+          content: [
+            { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "A" }] }] },
+            { type: "tableCell", content: [{ type: "paragraph", content: [{ type: "text", text: "B" }] }] },
+          ],
+        }],
+      },
+      { type: "image", attrs: { attachmentId: "018f2c1a-7c31-7b2a-9a10-2d5e6f7a8b9c", alt: "Chart", decorative: false } },
+      { type: "pageBreak" },
+    ],
+  }, "prosemirror");
+  const projected = project(doc);
+  assert.match(JSON.stringify(projected.canonicalJson), /"type":"table"/);
+  assert.match(projected.acceptedHtml, /<table>/);
+  assert.match(projected.acceptedHtml, /data-attachment-id="018f2c1a-7c31-7b2a-9a10-2d5e6f7a8b9c"/);
+  assert.match(projected.acceptedHtml, /class="page-break"/);
+  assert.match(projected.acceptedText, /\[image\]/);
+  assert.equal(projected.schemaVersion, 2);
+});
+
 test("an accept update drops the insert mark", () => {
   const schema = getSchema(schemaExtensions());
   const marked = prosemirrorJSONToYDoc(schema, {

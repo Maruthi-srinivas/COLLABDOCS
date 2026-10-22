@@ -6,6 +6,7 @@ import com.collabdocs.common.Ids;
 import com.collabdocs.persistence.ContentUpdateService;
 import com.collabdocs.persistence.DocumentAccessService;
 import com.collabdocs.persistence.DocumentPurgeService;
+import com.collabdocs.persistence.ObjectStorage;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -25,39 +26,56 @@ public class DocumentService {
     private final DocumentAccessService access;
     private final ContentUpdateService updates;
     private final DocumentPurgeService purge;
+    private final ObjectStorage storage;
     private final byte[] emptySnapshot;
 
     public DocumentService(JdbcTemplate jdbc, DocumentAccessService access, ContentUpdateService updates,
-                           DocumentPurgeService purge) throws IOException {
+                           DocumentPurgeService purge, ObjectStorage storage) throws IOException {
         this.jdbc = jdbc;
         this.access = access;
         this.updates = updates;
         this.purge = purge;
+        this.storage = storage;
         this.emptySnapshot = new ClassPathResource("collab/empty-doc-v1.bin").getContentAsByteArray();
     }
 
     @Transactional
     public Map<String, Object> create(UUID userId, UUID workspaceId, String title, UUID folderId) {
+        return create(userId, workspaceId, title, folderId, null);
+    }
+
+    @Transactional
+    public Map<String, Object> create(UUID userId, UUID workspaceId, String title, UUID folderId, UUID templateId) {
         access.requireWorkspaceMember(userId, workspaceId);
         if (folderId != null) {
             requireFolder(workspaceId, folderId);
         }
         UUID id = Ids.uuidV7();
         String name = title == null || title.isBlank() ? "Untitled document" : checkTitle(title);
+        byte[] snapshot = emptySnapshot;
+        int schemaVersion = 1;
+        if (templateId != null) {
+            var keys = jdbc.query(
+                    "SELECT snapshot_object_key FROM templates WHERE id = ? AND workspace_id IS NULL",
+                    (rs, row) -> rs.getString(1), templateId);
+            if (keys.isEmpty()) throw new ApiException(404, "NOT_FOUND", "Template is not available.");
+            snapshot = storage.get(keys.get(0));
+            schemaVersion = "templates/blank.bin".equals(keys.get(0)) ? 1 : 2;
+        }
         jdbc.update(
                 """
-                INSERT INTO documents (id, workspace_id, folder_id, owner_id, title)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO documents (id, workspace_id, folder_id, owner_id, title, schema_version)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                id, workspaceId, folderId, userId, name);
+                id, workspaceId, folderId, userId, name, schemaVersion);
         jdbc.update("INSERT INTO document_epochs (document_id, epoch) VALUES (?, 1)", id);
         jdbc.update(
                 """
                 INSERT INTO document_snapshots
                   (id, document_id, epoch, through_seq, schema_version, kind, byte_size, state, created_by)
-                VALUES (?, ?, 1, 0, 1, 'base', ?, ?, ?)
+                VALUES (?, ?, 1, 0, ?, 'base', ?, ?, ?)
                 """,
-                Ids.uuidV7(), id, emptySnapshot.length, emptySnapshot, userId);
+                Ids.uuidV7(), id, schemaVersion, snapshot.length, snapshot, userId);
         jdbc.update(
                 """
                 INSERT INTO document_permissions (id, document_id, principal_type, user_id, role, granted_by)
@@ -109,6 +127,30 @@ public class DocumentService {
                 : jdbc.update(sql, name, documentId, Integer.parseInt(ifMatch));
         if (updated == 0) {
             throw new ApiException(409, "VERSION_CONFLICT", "The document changed. Reload and try again.");
+        }
+        return get(userId, documentId);
+    }
+
+    @Transactional
+    public Map<String, Object> update(UUID userId, UUID documentId, Map<String, Object> body, String ifMatch) {
+        if (body.containsKey("title")) {
+            rename(userId, documentId, stringValue(body.get("title")), ifMatch);
+        }
+        if (body.containsKey("headerText") || body.containsKey("footerText") || body.containsKey("pageNumbers")) {
+            access.require(userId, documentId, DocumentRole.EDITOR);
+            String header = body.containsKey("headerText") ? clip(stringValue(body.get("headerText"))) : null;
+            String footer = body.containsKey("footerText") ? clip(stringValue(body.get("footerText"))) : null;
+            Boolean numbers = body.containsKey("pageNumbers") ? Boolean.TRUE.equals(body.get("pageNumbers")) : null;
+            jdbc.update(
+                    """
+                    UPDATE documents
+                    SET header_text = COALESCE(?, header_text),
+                        footer_text = COALESCE(?, footer_text),
+                        page_numbers = COALESCE(?, page_numbers),
+                        updated_at = now()
+                    WHERE id = ?
+                    """,
+                    header, footer, numbers, documentId);
         }
         return get(userId, documentId);
     }
@@ -366,6 +408,9 @@ public class DocumentService {
         body.put("epoch", rs.getInt("epoch"));
         body.put("schemaVersion", rs.getInt("schema_version"));
         body.put("wordCount", rs.getInt("word_count"));
+        body.put("headerText", rs.getString("header_text"));
+        body.put("footerText", rs.getString("footer_text"));
+        body.put("pageNumbers", rs.getBoolean("page_numbers"));
         body.put("effectiveRole", rs.getString("role") == null ? "owner" : rs.getString("role"));
         body.put("starred", rs.getBoolean("starred"));
         body.put("version", rs.getInt("version"));
@@ -374,6 +419,15 @@ public class DocumentService {
         Timestamp edited = rs.getTimestamp("last_edited_at");
         body.put("lastEditedAt", edited == null ? "" : edited.toInstant().toString());
         return body;
+    }
+
+    private static String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private static String clip(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        return trimmed.length() > 500 ? trimmed.substring(0, 500) : trimmed;
     }
 
     static String checkTitle(String title) {

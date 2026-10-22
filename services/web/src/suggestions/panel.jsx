@@ -47,7 +47,7 @@ export function SuggestionPanel({ documentId, editor, ydoc, linkRef, canResolve,
   }
   if (!canResolve) return null;
   return (
-    <div className="suggestion-list" aria-label="Suggestions">
+    <div className="suggestion-list" role="region" aria-label="Suggestions">
       {items.map((item) => (
         <div className="row" key={item.id}>
           <span>{item.authorName} {item.type}{item.anchorState === "detached" ? " (detached)" : ""}</span>
