@@ -34,7 +34,7 @@ async function readQueue(documentId) {
   return value;
 }
 
-export function connectDocument({ documentId, clientId, ydoc, getToken, intent, onStatus, onPresence, onReady, onRevoked, onEpoch }) {
+export function connectDocument({ documentId, clientId, ydoc, getToken, intent, onStatus, onPresence, onReady, onRevoked, onEpoch, onComment }) {
   let socket = null;
   let epoch = null;
   const applied = new Set();
@@ -43,6 +43,8 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
   let opened = false;
   const outbound = [];
   let timer = null;
+  let paused = false;
+  let skipFlush = false;
 
   const flushHttp = async () => {
     const stored = await readQueue(documentId);
@@ -52,7 +54,7 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
     for (const item of items) {
       await api(`/api/v1/documents/${documentId}/content-updates`, {
         method: "POST",
-        body: JSON.stringify({ clientId, updateId: item.updateId, epoch, intent: "edit", payloadBase64: item.payloadBase64 }),
+        body: JSON.stringify({ clientId, updateId: item.updateId, epoch, intent: item.intent || intent, payloadBase64: item.payloadBase64 }),
       });
     }
     await writeQueue(documentId, { epoch, items: [] });
@@ -62,7 +64,7 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
 
   const persist = () => writeQueue(documentId, {
     epoch,
-    items: outbound.map((item) => ({ updateId: item.updateId, payloadBase64: encode(item.bytes) })),
+    items: outbound.map((item) => ({ updateId: item.updateId, intent: item.intent, payloadBase64: encode(item.bytes) })),
   });
 
   const send = (frame) => {
@@ -75,6 +77,9 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
     if (frame.type === "welcome") {
       const plan = planWelcome(epoch, applied, frame.payload);
       if (plan.reset) {
+        outbound.length = 0;
+        skipFlush = true;
+        writeQueue(documentId, { epoch: frame.payload.epoch, items: [] });
         onEpoch(frame.payload);
         return;
       }
@@ -87,7 +92,7 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
       opened = true;
       onReady({ role: frame.payload.role, epoch });
       for (const item of outbound) {
-        send({ type: "sync.update", payload: { updateId: item.updateId, epoch, intent: "edit", payloadBase64: encode(item.bytes) } });
+        send({ type: "sync.update", payload: { updateId: item.updateId, epoch, intent: item.intent || intent, payloadBase64: encode(item.bytes) } });
       }
       onStatus(outbound.length ? "saving" : "saved");
     } else if (frame.type === "sync.apply") {
@@ -107,6 +112,13 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
       onPresence(frame.payload);
     } else if (frame.type === "acl.revoked") {
       onRevoked();
+    } else if (frame.type === "comment.changed") {
+      onComment?.();
+    } else if (frame.type === "document.restored") {
+      outbound.length = 0;
+      skipFlush = true;
+      writeQueue(documentId, { epoch: frame.payload.epoch, items: [] });
+      onEpoch(frame.payload);
     } else if (frame.type === "error" && frame.payload?.code === "FORBIDDEN") {
       onStatus("error");
     }
@@ -136,7 +148,7 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
         return;
       }
       if (!stopped) {
-        if (outbound.length) flushHttp().catch(() => onStatus("error"));
+        if (!skipFlush && outbound.length) flushHttp().catch(() => onStatus("error"));
         const delay = Math.min(10000, 500 * (2 ** attempt));
         attempt += 1;
         timer = setTimeout(connect, delay);
@@ -145,17 +157,18 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
   };
 
   const onUpdate = (update, origin) => {
-    if (origin === "remote" || intent !== "edit") return;
+    if (origin === "remote" || origin === "resolve" || paused) return;
+    if (intent !== "edit" && intent !== "suggest") return;
     if (outbound.length >= 100) {
       onStatus("error");
       return;
     }
-    outbound.push({ updateId: cryptoId(), bytes: update });
+    outbound.push({ updateId: cryptoId(), bytes: update, intent });
     onStatus("saving");
     persist();
     if (opened && epoch != null) {
       const item = outbound[outbound.length - 1];
-      send({ type: "sync.update", payload: { updateId: item.updateId, epoch, intent: "edit", payloadBase64: encode(item.bytes) } });
+      send({ type: "sync.update", payload: { updateId: item.updateId, epoch, intent: item.intent, payloadBase64: encode(item.bytes) } });
     }
   };
   ydoc.on("update", onUpdate);
@@ -166,6 +179,8 @@ export function connectDocument({ documentId, clientId, ydoc, getToken, intent, 
     awareness(anchor, head, displayName, color) {
       send({ type: "awareness", payload: { anchor, head, displayName, color } });
     },
+    pause() { paused = true; },
+    resume() { paused = false; },
     close() {
       stopped = true;
       clearInterval(ping);

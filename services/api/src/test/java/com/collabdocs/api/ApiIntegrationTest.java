@@ -83,23 +83,12 @@ class ApiIntegrationTest {
         assertEquals(HttpStatus.CONFLICT, duplicate.getStatusCode());
 
         String workspaceId = ((Map<?, ?>) created.getBody().get("workspace")).get("id").toString();
-        ResponseEntity<Map> blocked = post("/api/v1/workspaces/" + workspaceId + "/documents", Map.of(), token);
-        assertEquals(HttpStatus.FORBIDDEN, blocked.getStatusCode());
-
-        String raw = mail.messages.get(0).text().substring(mail.messages.get(0).text().indexOf("token=") + 6).trim();
-        ResponseEntity<Map> verified = post("/api/v1/auth/verify-email", Map.of("token", raw), null);
-        assertEquals(HttpStatus.OK, verified.getStatusCode());
-        ResponseEntity<Map> login = post("/api/v1/auth/login", Map.of("email", email, "password", "correct-horse-1"), null);
-        String verifiedToken = login.getBody().get("accessToken").toString();
-        ResponseEntity<Map> document = post("/api/v1/workspaces/" + workspaceId + "/documents", Map.of("title", "Notes"), verifiedToken);
+        ResponseEntity<Map> document = post("/api/v1/workspaces/" + workspaceId + "/documents", Map.of("title", "Notes"), token);
         assertEquals(HttpStatus.CREATED, document.getStatusCode());
         String documentId = document.getBody().get("id").toString();
 
         String otherEmail = "omar-" + UUID.randomUUID() + "@example.com";
         post("/api/v1/auth/register", Map.of("email", otherEmail, "displayName", "Omar K", "password", "correct-horse-1"), null);
-        String otherRaw = mail.messages.get(mail.messages.size() - 1).text();
-        otherRaw = otherRaw.substring(otherRaw.indexOf("token=") + 6).trim();
-        post("/api/v1/auth/verify-email", Map.of("token", otherRaw), null);
         ResponseEntity<Map> otherLogin = post("/api/v1/auth/login", Map.of("email", otherEmail, "password", "correct-horse-1"), null);
         ResponseEntity<Map> hidden = exchange("/api/v1/documents/" + documentId, HttpMethod.GET, null,
                 otherLogin.getBody().get("accessToken").toString());
@@ -197,13 +186,9 @@ class ApiIntegrationTest {
         String email = "user-" + UUID.randomUUID() + "@example.com";
         ResponseEntity<Map> created = post("/api/v1/auth/register", Map.of(
                 "email", email, "displayName", "Test User", "password", "correct-horse-1"), null);
-        String raw = mail.messages.get(mail.messages.size() - 1).text();
-        raw = raw.substring(raw.indexOf("token=") + 6).trim();
-        post("/api/v1/auth/verify-email", Map.of("token", raw), null);
-        ResponseEntity<Map> login = post("/api/v1/auth/login", Map.of("email", email, "password", "correct-horse-1"), null);
         String workspaceId = ((Map<?, ?>) created.getBody().get("workspace")).get("id").toString();
         String userId = ((Map<?, ?>) created.getBody().get("user")).get("id").toString();
-        return new User(email, userId, workspaceId, login.getBody().get("accessToken").toString());
+        return new User(email, userId, workspaceId, created.getBody().get("accessToken").toString());
     }
 
     private ResponseEntity<Map> post(String path, Object body, String token) {

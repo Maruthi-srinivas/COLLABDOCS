@@ -20,12 +20,44 @@ export function encodeDoc(doc) {
   return Y.encodeStateAsUpdate(doc);
 }
 
+function escapeHtml(value) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[character]));
+}
+
+function acceptedParagraphs(root) {
+  const paragraphs = [];
+  root.forEach((block) => {
+    let text = "";
+    block.descendants((node) => {
+      if (!node.isText) return;
+      if (node.marks.some((mark) => mark.type.name === "suggestionInsert")) return;
+      text += node.text;
+    });
+    paragraphs.push(text);
+  });
+  return paragraphs;
+}
+
+export function acceptedHtml(root) {
+  return acceptedParagraphs(root).map((line) => `<p>${escapeHtml(line)}</p>`).join("");
+}
+
 export function project(doc) {
   const root = yXmlFragmentToProseMirrorRootNode(doc.getXmlFragment("prosemirror"), schema);
   const canonicalJson = root.toJSON();
-  const acceptedText = root.textContent || "";
+  const paragraphs = acceptedParagraphs(root);
+  const acceptedText = paragraphs.join("\n");
   const words = acceptedText.trim() ? acceptedText.trim().split(/\s+/).length : 0;
-  return { schemaVersion: 1, canonicalJson, acceptedText, wordCount: words, warnings: [] };
+  return {
+    schemaVersion: 1,
+    canonicalJson,
+    acceptedText,
+    acceptedHtml: acceptedHtml(root),
+    wordCount: words,
+    warnings: [],
+  };
 }
 
 export function encodeCanonical(canonicalJson) {

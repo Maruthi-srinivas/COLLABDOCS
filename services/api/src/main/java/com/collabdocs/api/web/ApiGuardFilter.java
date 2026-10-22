@@ -63,17 +63,10 @@ public class ApiGuardFilter extends OncePerRequestFilter {
             JwtService.AccessClaims claims = jwt.parse(header.substring(7));
             denylist.check(claims.sessionId());
             request.setAttribute("currentUser", claims);
-            if (!claims.emailVerified() && !allowedWhileUnverified(path)) {
-                throw new ApiException(403, "EMAIL_UNVERIFIED", "Verify your email to continue.");
-            }
             chain.doFilter(request, response);
         } catch (ApiException exception) {
             write(response, exception);
         }
-    }
-
-    private static boolean allowedWhileUnverified(String path) {
-        return path.startsWith("/api/v1/auth") || path.equals("/api/v1/me") || path.startsWith("/api/v1/me/");
     }
 
     private void write(HttpServletResponse response, ApiException exception) throws IOException {

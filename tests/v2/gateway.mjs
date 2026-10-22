@@ -1,5 +1,4 @@
 const api = process.env.API_URL || "http://api:8080";
-const mailpit = process.env.MAILPIT_URL || "http://mailpit:8025";
 const compactor = process.env.COMPACTOR_URL || "http://compactor:8083";
 const token = process.env.INTERNAL_TOKEN || "change-me-internal";
 
@@ -38,24 +37,9 @@ async function json(path, options = {}) {
   return body;
 }
 
-async function mailToken(email) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const list = await fetch(`${mailpit}/api/v1/messages`).then((response) => response.json());
-    const message = (list.messages || []).find((item) => (item.To || []).some((to) => to.Address === email) || (item.Snippet || "").includes(email));
-    if (message) {
-      const detail = await fetch(`${mailpit}/api/v1/message/${message.ID}`).then((response) => response.json());
-      const match = (detail.Text || detail.HTML || "").match(/token=([A-Za-z0-9_-]+)/);
-      if (match) return match[1];
-    }
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-  throw new Error("mail missing");
-}
-
 async function account(name) {
   const email = `${name}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`.toLowerCase();
   const created = await json("/api/v1/auth/register", { method: "POST", body: JSON.stringify({ email, displayName: name, password: "correct-horse-1" }) });
-  await json("/api/v1/auth/verify-email", { method: "POST", body: JSON.stringify({ token: await mailToken(email) }) });
   const login = await json("/api/v1/auth/login", { method: "POST", body: JSON.stringify({ email, password: "correct-horse-1" }) });
   return { email, access: login.accessToken, userId: created.user.id, workspaceId: created.workspace.id };
 }

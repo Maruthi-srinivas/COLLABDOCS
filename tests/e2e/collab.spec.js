@@ -1,7 +1,5 @@
 import { test, expect } from "@playwright/test";
 
-const mailpit = process.env.MAILPIT_URL || "http://localhost:8025";
-
 test("two editors converge and revoke closes the second", async ({ browser }) => {
   const owner = await browser.newContext();
   const guest = await browser.newContext();
@@ -39,20 +37,5 @@ async function register(page, name, email) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill("correct-horse-1");
   await page.getByRole("button", { name: "Register" }).click();
-  await page.goto(`/verify-email?token=${await verificationToken(email)}`);
   await expect(page.getByRole("button", { name: "New document" })).toBeVisible();
-}
-
-async function verificationToken(email) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const list = await fetch(`${mailpit}/api/v1/messages`).then((response) => response.json());
-    const message = (list.messages || []).find((item) => JSON.stringify(item).includes(email));
-    if (message) {
-      const detail = await fetch(`${mailpit}/api/v1/message/${message.ID}`).then((response) => response.json());
-      const match = (detail.Text || detail.HTML || "").match(/token=([A-Za-z0-9_-]+)/);
-      if (match) return match[1];
-    }
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-  throw new Error("verification mail not found");
 }

@@ -104,12 +104,15 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: collabdocs
       APP_PUBLIC_URL: http://localhost:8080
+      COMPACTOR_URL: http://compactor:8083
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
       mailpit:
+        condition: service_started
+      compactor:
         condition: service_started
       minio:
         condition: service_healthy

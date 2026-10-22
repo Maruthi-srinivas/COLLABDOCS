@@ -6,10 +6,14 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import * as Y from "yjs";
-import { yUndoPlugin } from "y-prosemirror";
+import { ySyncPluginKey, yUndoPlugin } from "y-prosemirror";
 import { api, getAccessToken, refreshSession, setAccessToken } from "./api/client.js";
 import { connectDocument } from "./collab/connection.js";
 import { counts, editorExtensions, stripScripts } from "./editor/schema.js";
+import { CommentPanel } from "./comments/panel.jsx";
+import { suggestionExtension } from "./suggestions/plugin.js";
+import { SuggestionPanel } from "./suggestions/panel.jsx";
+import { VersionPanel } from "./versions/panel.jsx";
 import "./styles.css";
 
 function randomId() {
@@ -59,9 +63,8 @@ function App() {
   );
 }
 
-function Require({ session, children }) {
+function Require({ children }) {
   if (!getAccessToken()) return <Navigate to="/login" replace />;
-  if (session.user && !session.user.emailVerified) return <Navigate to="/verify-email" replace />;
   return children;
 }
 
@@ -79,8 +82,7 @@ function AuthPage({ mode, session }) {
       const data = await api(path, { method: "POST", body: JSON.stringify(body), skipRefresh: true });
       setAccessToken(data.accessToken);
       session.setUser(data.user);
-      if (!data.user.emailVerified) navigate("/verify-email");
-      else navigate(`/w/${data.workspace?.id || (await api("/api/v1/workspaces")).items[0].id}`);
+      navigate(`/w/${data.workspace?.id || (await api("/api/v1/workspaces")).items[0].id}`);
     } catch (err) {
       setError(err.message);
     }
@@ -177,6 +179,7 @@ function Shell({ workspaceId, children }) {
         <form className="topbar" onSubmit={(event) => { event.preventDefault(); navigate(`/w/${workspaceId}/search?q=${encodeURIComponent(query)}`); }}>
           <label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           <button type="submit">Search</button>
+          <NotificationBell />
         </form>
         <div id="content">{children}</div>
       </div>
@@ -184,10 +187,28 @@ function Shell({ workspaceId, children }) {
   );
 }
 
-function Home({ session }) {
+function NotificationBell() {
+  const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let stopped = false;
+    const load = () => api("/api/v1/notifications?unread=true").then((data) => { if (!stopped) setItems(data.items || []); }).catch(() => {});
+    load();
+    const timer = setInterval(load, 30000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, []);
+  return (
+    <div>
+      <button type="button" className="ghost" onClick={() => setOpen((value) => !value)}>Notifications{items.length ? ` (${items.length})` : ""}</button>
+      {open && items.map((item) => <p key={item.id}>{item.type}</p>)}
+      {open && <button type="button" className="ghost" onClick={() => api("/api/v1/notifications/read-all", { method: "POST" }).then(() => setItems([]))}>Mark read</button>}
+    </div>
+  );
+}
+
+function Home() {
   const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: () => api("/api/v1/workspaces") });
   if (!workspaces.data) return <p role="status">Loading CollabDocs</p>;
-  if (!session.user.emailVerified) return <Navigate to="/verify-email" />;
   return <Navigate to={`/w/${workspaces.data.items[0].id}`} />;
 }
 
@@ -245,9 +266,14 @@ function EditorPage({ session }) {
   const [peers, setPeers] = useState({});
   const [menu, setMenu] = useState(null);
   const [sharing, setSharing] = useState(false);
+  const [mode, setMode] = useState("edit");
+  const [generation, setGeneration] = useState(0);
+  const [restorePayload, setRestorePayload] = useState(null);
+  const [commentKey, setCommentKey] = useState(0);
+  const [epoch, setEpoch] = useState(1);
   const linkRef = useRef(null);
   const peersRef = useRef({});
-  const ydoc = useMemo(() => new Y.Doc(), [documentId]);
+  const ydoc = useMemo(() => new Y.Doc(), [documentId, generation]);
   const clientId = useMemo(() => {
     const existing = sessionStorage.getItem("collabdocs-client");
     if (existing) return existing;
@@ -261,45 +287,72 @@ function EditorPage({ session }) {
       setTitle(doc.title);
     }).catch((err) => setError(err.message));
   }, [documentId]);
-  const readOnly = meta && meta.effectiveRole !== "editor" && meta.effectiveRole !== "owner";
+  const role = meta?.effectiveRole;
+  const canEdit = role === "editor" || role === "owner";
+  const canSuggest = canEdit || role === "commenter";
+  const intent = mode === "suggest" && canSuggest ? "suggest" : canEdit && mode !== "suggest" ? "edit" : "view";
+  const readOnly = intent === "view" || Boolean(restorePayload);
   useEffect(() => {
     if (!meta) return undefined;
     const link = connectDocument({
       documentId,
       clientId,
       ydoc,
-      intent: readOnly ? "view" : "edit",
+      intent,
       getToken: getAccessToken,
       onStatus: setStatus,
       onPresence: (peer) => {
         peersRef.current = { ...peersRef.current, [peer.connectionId]: peer };
         setPeers(peersRef.current);
       },
-      onReady: (info) => setMeta((current) => ({ ...current, effectiveRole: info.role })),
+      onReady: (info) => {
+        setEpoch(info.epoch);
+        setMeta((current) => ({ ...current, effectiveRole: info.role }));
+      },
       onRevoked: () => setRevoked(true),
-      onEpoch: () => setNote("This document was restored. Reload to continue."),
+      onEpoch: (payload) => setRestorePayload(payload),
+      onComment: () => setCommentKey((value) => value + 1),
     });
     linkRef.current = link;
     return () => link.close();
-  }, [meta?.id, readOnly, documentId, clientId, ydoc]);
+  }, [meta?.id, intent, documentId, clientId, ydoc]);
   if (error) return <p role="alert">{error}</p>;
   if (!meta) return <p role="status">Loading document</p>;
   if (revoked) {
     return <p role="alert" data-testid="access-revoked">You no longer have access to this document. <Link to="/">Home</Link></p>;
   }
   return (
-    <EditorSurface
-      documentId={documentId} ydoc={ydoc} title={title} setTitle={setTitle} status={status}
-      readOnly={readOnly} peers={peers} peersRef={peersRef} linkRef={linkRef} menu={menu} setMenu={setMenu}
-      sharing={sharing} setSharing={setSharing} note={note} displayName={session.user?.displayName || "You"}
-    />
+    <>
+      {restorePayload && (
+        <div className="dialog-backdrop">
+          <div className="dialog" role="dialog" aria-label="Document restored">
+            <p>This document was restored. People who have it open are moved to the restored version.</p>
+            <button type="button" onClick={() => { setGeneration((value) => value + 1); setRestorePayload(null); }}>Continue</button>
+          </div>
+        </div>
+      )}
+      <EditorSurface
+        documentId={documentId} ydoc={ydoc} title={title} setTitle={setTitle} status={status}
+        readOnly={readOnly} peers={peers} peersRef={peersRef} linkRef={linkRef} menu={menu} setMenu={setMenu}
+        sharing={sharing} setSharing={setSharing} note={note} displayName={session.user?.displayName || "You"}
+        mode={mode} setMode={setMode} canSuggest={canSuggest} canEdit={canEdit} role={role}
+        authorId={session.user?.id} commentKey={commentKey} epoch={epoch} clientId={clientId}
+      />
+    </>
   );
 }
 
-function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, peers, peersRef, linkRef, menu, setMenu, sharing, setSharing, note, displayName }) {
+function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, peers, peersRef, linkRef, menu, setMenu, sharing, setSharing, note, displayName, mode, setMode, canSuggest, canEdit, role, authorId, commentKey, epoch, clientId }) {
+  const suggestionOptions = useRef({});
+  suggestionOptions.current = { enabled: mode === "suggest" && !readOnly, documentId, authorId, authorName: displayName };
+  const suggestion = useMemo(() => suggestionExtension(suggestionOptions), []);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  const selectable = !readOnly || canSuggest;
+  const [history, setHistory] = useState(false);
   const editor = useEditor({
-    extensions: editorExtensions(ydoc),
-    editable: !readOnly,
+    extensions: [...editorExtensions(ydoc), suggestion],
+    editable: selectable,
     editorProps: {
       attributes: { "data-testid": "editor", "aria-label": "Document", "aria-readonly": readOnly ? "true" : "false" },
       transformPastedHTML: stripScripts,
@@ -333,6 +386,14 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
       },
     },
     onCreate: ({ editor: instance }) => {
+      instance.registerPlugin(new Plugin({
+        key: new PluginKey("review-lock"),
+        filterTransaction(tr) {
+          if (!readOnlyRef.current) return true;
+          if (tr.getMeta(ySyncPluginKey) || tr.getMeta("suggestion-applied")) return true;
+          return !tr.docChanged;
+        },
+      }));
       instance.registerPlugin(yUndoPlugin());
       instance.registerPlugin(new Plugin({
         key: new PluginKey("remote-carets"),
@@ -354,8 +415,8 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
         },
       }));
     },
-  }, [readOnly, documentId]);
-  useEffect(() => { editor?.setEditable(!readOnly); }, [editor, readOnly]);
+  }, [selectable, documentId, ydoc]);
+  useEffect(() => { editor?.setEditable(selectable); }, [editor, selectable]);
   useEffect(() => { if (editor) editor.view.dispatch(editor.state.tr); }, [editor, peers]);
   useEffect(() => {
     if (!editor || readOnly) return undefined;
@@ -365,14 +426,20 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
     });
     return () => editor.off("selectionUpdate");
   }, [editor, readOnly, displayName]);
-  const text = editor?.getText() || "";
-  const tally = counts(text);
+  const tally = projectedCounts(editor);
   return (
-    <main onClick={() => setMenu(null)}>
+    <main onClick={() => setMenu(null)} className={role === "viewer" ? "viewer" : ""}>
       <a className="skip" href="#editor-anchor">Skip to document</a>
       <div className="topbar">
         <label>Title<input aria-label="Title" value={title} disabled={readOnly} onChange={(event) => setTitle(event.target.value)} onBlur={() => api(`/api/v1/documents/${documentId}`, { method: "PATCH", body: JSON.stringify({ title }) })} /></label>
         <button type="button" className="ghost" onClick={() => setSharing(true)}>Share</button>
+        <button type="button" className="ghost" onClick={() => setHistory((value) => !value)}>History</button>
+        {canSuggest && (
+          <div role="group" aria-label="Editing mode">
+            <button type="button" aria-pressed={mode !== "suggest"} onClick={() => setMode("edit")}>Editing</button>
+            <button type="button" aria-pressed={mode === "suggest"} onClick={() => setMode("suggest")}>Suggesting</button>
+          </div>
+        )}
         <button type="button" className="ghost" onClick={() => findReplace(editor)} disabled={readOnly}>Find</button>
         <span className="status" data-testid="save-status" role="status">{status === "saved" ? "Saved" : status === "error" ? "Could not save. Retry" : "Saving"}</span>
       </div>
@@ -397,8 +464,14 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
         }} />
         <Tool editor={editor} label="Clear formatting" run={(chain) => chain.unsetAllMarks().clearNodes()} />
       </div>
-      <div id="editor-anchor"><EditorContent editor={editor} /></div>
-      <p className="muted" aria-live="polite">{tally.words} words, {tally.characters} characters</p>
+      <div className="editor-layout">
+        <div>
+          <div id="editor-anchor"><EditorContent editor={editor} /></div>
+          <p className="muted" aria-live="polite">{tally.accepted.words} words, {tally.accepted.characters} characters{mode === "suggest" ? ` (${tally.suggested.words} including suggestions)` : ""}</p>
+          <SuggestionPanel documentId={documentId} editor={editor} ydoc={ydoc} linkRef={linkRef} canResolve={canEdit} clientId={clientId} epoch={epoch} />
+        </div>
+        <CommentPanel documentId={documentId} editor={editor} ydoc={ydoc} canComment={canSuggest} refreshKey={commentKey} />
+      </div>
       {menu && (
         <div className="dialog" style={{ position: "fixed", left: menu.x, top: menu.y }} role="menu">
           <Tool editor={editor} label="Bold" run={(chain) => chain.toggleBold()} />
@@ -406,9 +479,23 @@ function EditorSurface({ documentId, ydoc, title, setTitle, status, readOnly, pe
           <Tool editor={editor} label="Clear formatting" run={(chain) => chain.unsetAllMarks().clearNodes()} />
         </div>
       )}
+      {history && <VersionPanel documentId={documentId} canRestore={canEdit} />}
       {sharing && <ShareDialog documentId={documentId} onClose={() => setSharing(false)} />}
     </main>
   );
+}
+
+function projectedCounts(editor) {
+  let accepted = "";
+  let suggested = "";
+  editor?.state.doc.descendants((node) => {
+    if (!node.isText) return;
+    const insert = node.marks.some((mark) => mark.type.name === "suggestionInsert");
+    const deletion = node.marks.some((mark) => mark.type.name === "suggestionDelete");
+    if (!insert) accepted += node.text;
+    if (insert || !deletion) suggested += node.text;
+  });
+  return { accepted: counts(accepted), suggested: counts(suggested) };
 }
 
 function findReplace(editor) {

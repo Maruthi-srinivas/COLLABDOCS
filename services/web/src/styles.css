@@ -41,8 +41,20 @@ input, textarea { border: 1px solid #d6d3d1; border-radius: var(--radius); paddi
 .ProseMirror { min-height: 60vh; background: white; padding: 32px; border-radius: var(--radius); font-family: var(--font-editor); font-size: 18px; }
 .ProseMirror:focus { outline: none; }
 .status { margin-left: auto; }
-.dialog-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: grid; place-items: center; }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.35); display: grid; place-items: center; }
 .dialog { padding: var(--space-4); width: min(420px, 90vw); border-radius: var(--radius); }
+.editor-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--space-3); align-items: start; }
+.comment-panel, .version-panel, .card { background: var(--color-surface); padding: var(--space-3); border-radius: var(--radius); }
+.suggestion-insert { text-decoration: underline; color: var(--color-suggestion); }
+.suggestion-delete { text-decoration: line-through; color: var(--color-suggestion); }
+.suggestion-format { outline: 1px dashed var(--color-suggestion); }
+.viewer .suggestion-insert { display: none; }
+.viewer .suggestion-delete { text-decoration: none; color: inherit; }
+.viewer .suggestion-format { outline: none; }
+@media (max-width: 768px) {
+  .editor-layout { grid-template-columns: 1fr; }
+  .comment-panel { position: fixed; left: 0; right: 0; bottom: 0; max-height: 50vh; overflow: auto; z-index: 2; }
+}
 @media (max-width: 800px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { flex-direction: row; flex-wrap: wrap; }

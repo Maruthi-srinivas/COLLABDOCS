@@ -113,22 +113,12 @@ public class Gateway extends TextWebSocketHandler {
     private void authenticate(WebSocketSession session, JsonNode payload) {
         try {
             String intent = payload.path("intent").asText();
-            if ("suggest".equals(intent)) {
-                error(session, "FORBIDDEN", "Suggestions are not available yet.");
-                close(session, 4403, "Suggestions are not available yet.");
-                return;
-            }
-            if (!"edit".equals(intent) && !"view".equals(intent)) {
+            if (!"edit".equals(intent) && !"view".equals(intent) && !"suggest".equals(intent)) {
                 error(session, "INVALID_MESSAGE", "Intent is not supported.");
                 close(session, 4400, "Intent is not supported.");
                 return;
             }
             GatewayJwt.Access token = jwt.parse(payload.path("accessToken").asText());
-            if (!token.emailVerified()) {
-                error(session, "FORBIDDEN", "Verify your email to continue.");
-                close(session, 4403, "Verify your email.");
-                return;
-            }
             if (Boolean.TRUE.equals(redis.hasKey("denylist:session:" + token.sessionId()))) {
                 error(session, "UNAUTHENTICATED", "Sign in again.");
                 close(session, 4401, "Sign in again.");
@@ -139,6 +129,11 @@ public class Gateway extends TextWebSocketHandler {
             if ("edit".equals(intent) && !role.atLeast(DocumentRole.EDITOR)) {
                 error(session, "FORBIDDEN", "You cannot edit this document.");
                 close(session, 4403, "You cannot edit this document.");
+                return;
+            }
+            if ("suggest".equals(intent) && !role.atLeast(DocumentRole.COMMENTER)) {
+                error(session, "FORBIDDEN", "You cannot suggest on this document.");
+                close(session, 4403, "You cannot suggest on this document.");
                 return;
             }
             String name = jdbc.queryForObject("SELECT display_name FROM users WHERE id = ?", String.class, token.userId());
@@ -195,14 +190,15 @@ public class Gateway extends TextWebSocketHandler {
     private void append(WebSocketSession session, ClientSession client, JsonNode payload) {
         String updateId = payload.path("updateId").asText();
         try {
-            if (!client.canEdit() || !"edit".equals(payload.path("intent").asText("edit"))) {
+            String updateIntent = payload.path("intent").asText("edit");
+            if (!client.allows(updateIntent)) {
                 nack(session, updateId, "FORBIDDEN", "Viewers cannot edit.");
                 return;
             }
             byte[] raw = Base64.getDecoder().decode(payload.path("payloadBase64").asText());
             var ack = updates.append(new ContentUpdateService.AppendCommand(
                     client.documentId(), client.userId(), client.clientId(), UUID.fromString(updateId),
-                    payload.path("epoch").asInt(), "edit", raw));
+                    payload.path("epoch").asInt(), updateIntent, raw));
             ObjectNode frame = mapper.createObjectNode();
             frame.put("type", "sync.ack");
             ObjectNode body = frame.putObject("payload");
@@ -291,7 +287,9 @@ public class Gateway extends TextWebSocketHandler {
                     continue;
                 }
                 DocumentRole role = access.resolve(client.userId(), client.documentId());
-                if ("edit".equals(client.intent()) && !role.atLeast(DocumentRole.EDITOR)) {
+                boolean lostEdit = "edit".equals(client.intent()) && !role.atLeast(DocumentRole.EDITOR);
+                boolean lostSuggest = "suggest".equals(client.intent()) && !role.atLeast(DocumentRole.COMMENTER);
+                if (lostEdit || lostSuggest) {
                     error(session, "FORBIDDEN", "Access changed.");
                     close(session, 4403, "Access changed.");
                 }

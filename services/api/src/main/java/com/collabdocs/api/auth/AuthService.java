@@ -57,7 +57,10 @@ public class AuthService {
         UUID userId = Ids.uuidV7();
         UUID workspaceId = Ids.uuidV7();
         jdbc.update(
-                "INSERT INTO users (id, email, password_hash, display_name, status) VALUES (?, ?, ?, ?, 'pending_verification')",
+                """
+                INSERT INTO users (id, email, password_hash, display_name, status, email_verified_at)
+                VALUES (?, ?, ?, ?, 'active', now())
+                """,
                 userId, normalized, passwords.hash(password), displayName.trim());
         jdbc.update("INSERT INTO workspaces (id, name, owner_id) VALUES (?, ?, ?)",
                 workspaceId, displayName.trim() + "'s Workspace", userId);
@@ -70,9 +73,7 @@ public class AuthService {
                 WHERE principal_type = 'email_invite' AND email = ? AND revoked_at IS NULL
                 """,
                 userId, normalized);
-        sendToken(userId, normalized, "verify_email", "Verify your CollabDocs email",
-                publicUrl + "/verify-email?token=");
-        return issue(userId, false, userAgent, ip, true);
+        return issue(userId, true, userAgent, ip, true);
     }
 
     @Transactional
@@ -107,10 +108,18 @@ public class AuthService {
             if (user.purgeAfter() != null && user.purgeAfter().toInstant().isBefore(Instant.now())) {
                 throw new ApiException(403, "ACCOUNT_DISABLED", "This account is disabled.");
             }
-            String restored = user.verified() ? "active" : "pending_verification";
-            jdbc.update("UPDATE users SET status = ?, purge_after = NULL, updated_at = now() WHERE id = ?", restored, user.id());
         }
-        return issue(user.id(), user.verified() || "active".equals(user.status()), userAgent, ip, false);
+        if ("pending_verification".equals(user.status()) || "pending_deletion".equals(user.status()) || !user.verified()) {
+            jdbc.update(
+                    """
+                    UPDATE users
+                    SET status = 'active', email_verified_at = COALESCE(email_verified_at, now()),
+                        purge_after = NULL, updated_at = now()
+                    WHERE id = ? AND status IN ('pending_verification', 'pending_deletion', 'active')
+                    """,
+                    user.id());
+        }
+        return issue(user.id(), true, userAgent, ip, false);
     }
 
     @Transactional

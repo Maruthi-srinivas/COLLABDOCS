@@ -1,6 +1,6 @@
 import http from "node:http";
 import pg from "pg";
-import { compactState, encodeCanonical, project, applyTail } from "./compact.js";
+import { applyTail, compactState, encodeCanonical, project } from "./compact.js";
 
 const failures = new Map();
 const token = process.env.INTERNAL_TOKEN || "";
@@ -47,25 +47,35 @@ export async function compactDocument(client, documentId, force) {
   const row = locked.rows[0];
   const lag = Number(row.last_seq) - Number(row.snapshot_through_seq);
   const snap = await client.query(
-    `SELECT state, created_at FROM document_snapshots
+    `SELECT id, state, created_at FROM document_snapshots
      WHERE document_id = $1 AND epoch = $2 AND state IS NOT NULL
      ORDER BY through_seq DESC LIMIT 1`,
     [row.document_id, row.epoch],
   );
   const ageMs = snap.rows.length ? Date.now() - new Date(snap.rows[0].created_at).getTime() : Number.MAX_SAFE_INTEGER;
   if (!force && lag < 100 && !(lag > 0 && ageMs >= 5 * 60 * 1000)) return null;
-  if (lag <= 0) return null;
+  if (lag <= 0) {
+    return force && snap.rows[0]
+      ? { documentId: row.document_id, throughSeq: Number(row.snapshot_through_seq), snapshotId: snap.rows[0].id, reused: true }
+      : null;
+  }
   const updates = await client.query(
     `SELECT payload FROM collab_updates
      WHERE document_id = $1 AND epoch = $2 AND seq > $3 ORDER BY seq`,
     [row.document_id, row.epoch, row.snapshot_through_seq],
   );
   const compacted = compactState(snap.rows[0]?.state, updates.rows.map((item) => item.payload));
+  const snapshotId = crypto.randomUUID();
   await client.query(
     `INSERT INTO document_snapshots
       (id, document_id, epoch, through_seq, schema_version, kind, byte_size, state)
      VALUES ($1, $2, $3, $4, $5, 'automatic', $6, $7)`,
-    [crypto.randomUUID(), row.document_id, row.epoch, row.last_seq, row.schema_version, compacted.state.length, compacted.state],
+    [snapshotId, row.document_id, row.epoch, row.last_seq, row.schema_version, compacted.state.length, compacted.state],
+  );
+  await client.query(
+    `INSERT INTO document_versions (id, document_id, snapshot_id, kind)
+     VALUES ($1, $2, $3, 'automatic')`,
+    [crypto.randomUUID(), row.document_id, snapshotId],
   );
   await client.query(
     `UPDATE document_epochs SET snapshot_through_seq = $3 WHERE document_id = $1 AND epoch = $2`,
@@ -76,7 +86,30 @@ export async function compactDocument(client, documentId, force) {
     [row.document_id, compacted.wordCount],
   );
   failures.delete(String(row.document_id));
-  return { documentId: row.document_id, throughSeq: Number(row.last_seq), wordCount: compacted.wordCount };
+  return { documentId: row.document_id, throughSeq: Number(row.last_seq), wordCount: compacted.wordCount, snapshotId };
+}
+
+export async function fulfillNamed(client, documentId, requestId) {
+  const request = await client.query(
+    `SELECT id, label, requested_by FROM snapshot_requests
+     WHERE id = $1 AND document_id = $2 AND status = 'pending'
+     FOR UPDATE`,
+    [requestId, documentId],
+  );
+  if (!request.rows.length) return null;
+  const compacted = await compactDocument(client, documentId, true);
+  if (!compacted?.snapshotId) throw new Error("no snapshot");
+  const versionId = crypto.randomUUID();
+  await client.query(
+    `INSERT INTO document_versions (id, document_id, snapshot_id, kind, label, created_by)
+     VALUES ($1, $2, $3, 'named', $4, $5)`,
+    [versionId, documentId, compacted.snapshotId, request.rows[0].label, request.rows[0].requested_by],
+  );
+  await client.query(
+    `UPDATE snapshot_requests SET status = 'done', snapshot_id = $2 WHERE id = $1`,
+    [requestId, compacted.snapshotId],
+  );
+  return { ...compacted, versionId };
 }
 
 async function compactDue() {
@@ -136,7 +169,9 @@ const server = http.createServer(async (req, res) => {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const result = await compactDocument(client, body.documentId, true);
+        const result = body.requestId
+          ? await fulfillNamed(client, body.documentId, body.requestId)
+          : await compactDocument(client, body.documentId, true);
         await client.query("COMMIT");
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(result || { compacted: false }));

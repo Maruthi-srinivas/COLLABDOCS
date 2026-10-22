@@ -3,6 +3,7 @@ import Underline from "@tiptap/extension-underline";
 import Link from "@tiptap/extension-link";
 import TextAlign from "@tiptap/extension-text-align";
 import Collaboration from "@tiptap/extension-collaboration";
+import { suggestionMarks } from "./marks.js";
 
 export function editorExtensions(ydoc) {
   return [
@@ -10,6 +11,7 @@ export function editorExtensions(ydoc) {
     Underline,
     Link.configure({ openOnClick: false, autolink: false, protocols: ["http", "https", "mailto"] }),
     TextAlign.configure({ types: ["heading", "paragraph"] }),
+    ...suggestionMarks(),
     ...(ydoc ? [Collaboration.configure({ document: ydoc, field: "prosemirror" })] : []),
   ];
 }

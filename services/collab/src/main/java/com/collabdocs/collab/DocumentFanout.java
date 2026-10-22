@@ -94,6 +94,19 @@ public class DocumentFanout implements MessageListener {
                 payload.put("anchor", body.path("anchor").asInt());
                 payload.put("head", body.path("head").asInt());
                 send(room, frame, body.path("origin").asText());
+            } else if ("comment".equals(kind)) {
+                ObjectNode frame = mapper.createObjectNode();
+                frame.put("type", "comment.changed");
+                frame.putObject("payload").put("documentId", documentId.toString());
+                send(room, frame, "");
+            } else if ("restored".equals(kind)) {
+                ObjectNode frame = mapper.createObjectNode();
+                frame.put("type", "document.restored");
+                ObjectNode payload = frame.putObject("payload");
+                payload.put("epoch", body.path("epoch").asInt());
+                payload.put("snapshotBase64", body.path("snapshotBase64").asText());
+                payload.put("throughSeq", body.path("throughSeq").asLong());
+                send(room, frame, "");
             } else if ("acl".equals(kind)) {
                 ObjectNode frame = mapper.createObjectNode();
                 String event = body.path("event").asText();

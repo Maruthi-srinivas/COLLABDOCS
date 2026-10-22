@@ -21,14 +21,16 @@ public class ShareService {
     private final JdbcTemplate jdbc;
     private final MailPort mail;
     private final AclEvents acl;
+    private final NotificationService notifications;
     private final ObjectMapper mapper;
     private final String publicUrl;
 
-    public ShareService(JdbcTemplate jdbc, MailPort mail, AclEvents acl, ObjectMapper mapper,
+    public ShareService(JdbcTemplate jdbc, MailPort mail, AclEvents acl, NotificationService notifications, ObjectMapper mapper,
                         @Value("${collabdocs.app-public-url}") String publicUrl) {
         this.jdbc = jdbc;
         this.mail = mail;
         this.acl = acl;
+        this.notifications = notifications;
         this.mapper = mapper;
         this.publicUrl = publicUrl;
     }
@@ -69,6 +71,7 @@ public class ShareService {
             audit(workspaceId, actor, "grant", documentId, Map.of("userId", userId.toString(), "role", parsed.name().toLowerCase()));
             afterCommit(() -> acl.publish(documentId, userId, "role", parsed.name().toLowerCase()));
             mail.send(known.get(0), "A document was shared with you", publicUrl + "/d/" + documentId);
+            notifications.notify(userId, "share_invite", Map.of("documentId", documentId.toString()));
             return created;
         }
         if (email == null || !email.contains("@")) {
@@ -85,6 +88,7 @@ public class ShareService {
             UUID granted = existing.get(0);
             afterCommit(() -> acl.publish(documentId, granted, "role", parsed.name().toLowerCase()));
             mail.send(normalized, "A document was shared with you", publicUrl + "/d/" + documentId);
+            notifications.notify(existing.get(0), "share_invite", Map.of("documentId", documentId.toString()));
             return created;
         }
         UUID id = Ids.uuidV7();
@@ -245,6 +249,10 @@ public class ShareService {
         if (!open.isEmpty()) return Map.of("id", open.get(0), "status", "open", "existing", true);
         UUID id = Ids.uuidV7();
         jdbc.update("INSERT INTO access_requests (id, document_id, requester_id, status) VALUES (?, ?, ?, 'open')", id, documentId, actor);
+        UUID owner = jdbc.queryForObject("SELECT owner_id FROM documents WHERE id = ?", UUID.class, documentId);
+        if (owner != null && !owner.equals(actor)) {
+            notifications.notify(owner, "access_request", Map.of("documentId", documentId.toString(), "requestId", id.toString()));
+        }
         return Map.of("id", id, "status", "open", "existing", false);
     }
 
