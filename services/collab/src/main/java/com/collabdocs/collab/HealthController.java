@@ -1,5 +1,6 @@
 package com.collabdocs.collab;
 
+import com.collabdocs.common.AppMetrics;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
@@ -28,9 +29,22 @@ public class HealthController {
         String postgres = checkPostgres();
         String redis = checkRedis();
         boolean up = "up".equals(postgres) && "up".equals(redis);
+        AppMetrics.INSTANCE.gauge("db_up", "up".equals(postgres) ? 1 : 0, "service", "collab");
+        AppMetrics.INSTANCE.gauge("redis_up", "up".equals(redis) ? 1 : 0, "service", "collab");
+        if (!up) AppMetrics.INSTANCE.increment("ready_check_failures_total", "service", "collab");
         return ResponseEntity.status(up ? 200 : 503).body(Map.of(
                 "status", up ? "up" : "down",
                 "checks", Map.of("postgres", postgres, "redis", redis)));
+    }
+
+    @GetMapping(value = "/metrics", produces = "text/plain")
+    public String metrics() {
+        String postgres = checkPostgres();
+        String redis = checkRedis();
+        AppMetrics.INSTANCE.gauge("db_up", "up".equals(postgres) ? 1 : 0, "service", "collab");
+        AppMetrics.INSTANCE.gauge("redis_up", "up".equals(redis) ? 1 : 0, "service", "collab");
+        AppMetrics.INSTANCE.gauge("collab_sockets_open", Gateway.openSockets());
+        return AppMetrics.INSTANCE.render();
     }
 
     private String checkPostgres() {

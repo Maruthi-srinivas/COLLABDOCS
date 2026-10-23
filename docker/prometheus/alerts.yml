@@ -1,0 +1,66 @@
+groups:
+  - name: collabdocs
+    rules:
+      - alert: ApiErrorRate
+        expr: sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count[5m])), 0.001) > 0.02
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: API 5xx rate is above 2 percent
+      - alert: AckSlow
+        expr: histogram_quantile(0.95, sum by (le) (rate(collab_update_ack_seconds_bucket[10m]))) > 0.5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Ack p95 is above 500ms
+      - alert: GatewaySockets
+        expr: collab_sockets_open > 4000
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Open sockets are above 80 percent of the 5000 cap
+      - alert: SnapshotLag
+        expr: snapshot_lag_updates_max > 500
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Snapshot lag is above 500 updates
+      - alert: ExportStuck
+        expr: export_queue_age_seconds > 600
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: An export has been queued or running for more than 10 minutes
+      - alert: DatabaseDown
+        expr: db_up == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: Database check is down
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: Redis check is down
+      - alert: DiskLow
+        expr: 1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/parent-distro.*"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/parent-distro.*"}) > 0.70
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: A volume is over 70 percent full
+      - alert: DiskCritical
+        expr: 1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/parent-distro.*"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay",mountpoint!~"/parent-distro.*"}) > 0.85
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: A volume is over 85 percent full

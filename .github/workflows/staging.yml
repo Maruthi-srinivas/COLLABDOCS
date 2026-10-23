@@ -1,0 +1,25 @@
+name: staging
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare environment
+        run: cp .env.example .env
+      - name: Start staging overlay
+        run: docker compose --env-file .env -f docker-compose.yml -f docker-compose.staging.yml up -d --build
+      - name: Wait for API ready
+        run: |
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            if docker exec collabdocs-api-1 wget -qO- http://127.0.0.1:8080/health/ready | grep -q '"status":"up"'; then
+              exit 0
+            fi
+            sleep 15
+          done
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.staging.yml ps
+          exit 1

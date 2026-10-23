@@ -1,6 +1,7 @@
 package com.collabdocs.collab;
 
 import com.collabdocs.common.ApiException;
+import com.collabdocs.common.AppMetrics;
 import com.collabdocs.common.DocumentRole;
 import com.collabdocs.common.Ids;
 import com.collabdocs.persistence.ContentUpdateService;
@@ -53,6 +54,7 @@ public class Gateway extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         LIVE.put(session.getId(), session);
+        AppMetrics.INSTANCE.gauge("collab_sockets_open", LIVE.size());
         session.getAttributes().put("openedAt", System.currentTimeMillis());
         session.getAttributes().put("seenAt", System.currentTimeMillis());
         clock.schedule(() -> {
@@ -103,6 +105,7 @@ public class Gateway extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         LIVE.remove(session.getId());
+        AppMetrics.INSTANCE.gauge("collab_sockets_open", LIVE.size());
         ClientSession client = (ClientSession) session.getAttributes().get("client");
         if (client != null) {
             fanout.leave(client.documentId(), session);
@@ -120,6 +123,7 @@ public class Gateway extends TextWebSocketHandler {
             }
             GatewayJwt.Access token = jwt.parse(payload.path("accessToken").asText());
             if (Boolean.TRUE.equals(redis.hasKey("denylist:session:" + token.sessionId()))) {
+                AppMetrics.INSTANCE.increment("collab_auth_failures_total", "reason", "revoked");
                 error(session, "UNAUTHENTICATED", "Sign in again.");
                 close(session, 4401, "Sign in again.");
                 return;
@@ -187,8 +191,13 @@ public class Gateway extends TextWebSocketHandler {
         touchPresence(client);
     }
 
+    static int openSockets() {
+        return LIVE.size();
+    }
+
     private void append(WebSocketSession session, ClientSession client, JsonNode payload) {
         String updateId = payload.path("updateId").asText();
+        long started = System.nanoTime();
         try {
             String updateIntent = payload.path("intent").asText("edit");
             if (!client.allows(updateIntent)) {
@@ -207,10 +216,14 @@ public class Gateway extends TextWebSocketHandler {
             body.put("seq", ack.seq());
             body.put("duplicate", ack.duplicate());
             send(session, frame);
+            AppMetrics.INSTANCE.observe("collab_update_ack_seconds", (System.nanoTime() - started) / 1_000_000_000d,
+                    "result", ack.duplicate() ? "duplicate" : "ack");
+            AppMetrics.INSTANCE.increment("collab_updates_total", "result", ack.duplicate() ? "duplicate" : "ack");
             if (!ack.duplicate()) {
                 fanout.publishUpdate(client.documentId(), client.connectionId(), ack.epoch(), ack.seq(), client.userId(), raw);
             }
         } catch (ApiException exception) {
+            AppMetrics.INSTANCE.increment("collab_updates_total", "result", "nack");
             String code = exception.status() == 409 && "STALE_EPOCH".equals(exception.code()) ? "STALE_EPOCH" : exception.code();
             nack(session, updateId, code, exception.getMessage());
             if ("STALE_EPOCH".equals(code)) close(session, 4409, exception.getMessage());

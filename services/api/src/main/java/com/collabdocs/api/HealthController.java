@@ -1,5 +1,6 @@
 package com.collabdocs.api;
 
+import com.collabdocs.common.AppMetrics;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
@@ -28,9 +29,24 @@ public class HealthController {
         String postgres = checkPostgres();
         String redis = checkRedis();
         boolean up = "up".equals(postgres) && "up".equals(redis);
+        recordDependencies("api", postgres, redis);
+        if (!up) AppMetrics.INSTANCE.increment("ready_check_failures_total", "service", "api");
         return ResponseEntity.status(up ? 200 : 503).body(Map.of(
                 "status", up ? "up" : "down",
                 "checks", Map.of("postgres", postgres, "redis", redis)));
+    }
+
+    @GetMapping(value = "/metrics", produces = "text/plain")
+    public String metrics() {
+        String postgres = checkPostgres();
+        String redis = checkRedis();
+        recordDependencies("api", postgres, redis);
+        return AppMetrics.INSTANCE.render();
+    }
+
+    static void recordDependencies(String service, String postgres, String redis) {
+        AppMetrics.INSTANCE.gauge("db_up", "up".equals(postgres) ? 1 : 0, "service", service);
+        AppMetrics.INSTANCE.gauge("redis_up", "up".equals(redis) ? 1 : 0, "service", service);
     }
 
     private String checkPostgres() {

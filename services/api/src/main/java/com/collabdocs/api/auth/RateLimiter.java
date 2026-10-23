@@ -1,6 +1,7 @@
 package com.collabdocs.api.auth;
 
 import com.collabdocs.common.ApiException;
+import com.collabdocs.common.AppMetrics;
 import java.time.Duration;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -26,6 +27,8 @@ public class RateLimiter {
                 redis.expire(key, window);
             }
             if (count != null && count > limit) {
+                String route = key.startsWith("ratelimit:") ? key.split(":")[1] : "unknown";
+                AppMetrics.INSTANCE.increment("ratelimit_block_total", "route", route);
                 throw new ApiException(429, "RATE_LIMITED", "Too many requests. Try again later.");
             }
         } catch (ApiException exception) {

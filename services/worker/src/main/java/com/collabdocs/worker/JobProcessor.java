@@ -12,6 +12,7 @@ import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -24,15 +25,20 @@ public class JobProcessor {
     private final CompactorClient compactor;
     private final DocumentConverter converter;
     private final ObjectMapper mapper;
+    private final ClamAvScanner scanner;
+    private final String workerName;
 
     public JobProcessor(JdbcTemplate jdbc, ObjectStorage storage, StringRedisTemplate redis, CompactorClient compactor,
-                        DocumentConverter converter, ObjectMapper mapper) {
+                        DocumentConverter converter, ObjectMapper mapper, ClamAvScanner scanner,
+                        @Value("${collabdocs.worker-name:worker-1}") String workerName) {
         this.jdbc = jdbc;
         this.storage = storage;
         this.redis = redis;
         this.compactor = compactor;
         this.converter = converter;
         this.mapper = mapper;
+        this.scanner = scanner;
+        this.workerName = workerName;
         ensureGroup("jobs:export");
         ensureGroup("jobs:import");
     }
@@ -50,7 +56,7 @@ public class JobProcessor {
     private void read(String stream, boolean export) {
         try {
             List<MapRecord<String, Object, Object>> records = redis.opsForStream().read(
-                    org.springframework.data.redis.connection.stream.Consumer.from("workers", "worker-1"),
+                    org.springframework.data.redis.connection.stream.Consumer.from("workers", workerName),
                     org.springframework.data.redis.connection.stream.StreamReadOptions.empty().count(5),
                     StreamOffset.create(stream, ReadOffset.lastConsumed()));
             if (records == null) return;
@@ -80,6 +86,7 @@ public class JobProcessor {
                 "UPDATE export_jobs SET status = 'running', started_at = now(), attempts = attempts + 1 WHERE id = ? AND status = 'queued'",
                 jobId);
         if (claimed == 0) return;
+        long started = System.nanoTime();
         try {
             var rows = jdbc.query(
                     """
@@ -132,7 +139,11 @@ public class JobProcessor {
             jdbc.update(
                     "INSERT INTO notifications (id, user_id, type, payload) VALUES (?, ?, 'export_ready', ?::jsonb)",
                     Ids.uuidV7(), job.requestedBy, mapper.writeValueAsString(Map.of("jobId", jobId, "documentId", job.documentId, "format", job.format)));
+            com.collabdocs.common.AppMetrics.INSTANCE.observe("export_job_duration_seconds", (System.nanoTime() - started) / 1_000_000_000d,
+                    "format", job.format, "result", "succeeded");
         } catch (Exception exception) {
+            com.collabdocs.common.AppMetrics.INSTANCE.observe("export_job_duration_seconds", (System.nanoTime() - started) / 1_000_000_000d,
+                    "format", "unknown", "result", "failed");
             fail("export_jobs", jobId, "EXPORT_FAILED");
         }
     }
@@ -150,6 +161,17 @@ public class JobProcessor {
                     jobId);
             ImportRow job = rows.get(0);
             byte[] source = storage.get(job.objectKey);
+            try {
+                scanner.scan(source);
+            } catch (ClamAvScanner.MalwareDetected detected) {
+                try {
+                    storage.delete(job.objectKey);
+                } catch (RuntimeException ignored) {
+                    // The job is still failed and the object key is not attached to a document.
+                }
+                failNow("import_jobs", jobId, "MALWARE_DETECTED");
+                return;
+            }
             DocumentConverter.Imported imported = "docx".equals(job.format)
                     ? converter.importDocx(source)
                     : converter.importHtml(new String(source, java.nio.charset.StandardCharsets.UTF_8));
@@ -186,6 +208,10 @@ public class JobProcessor {
         } catch (Exception exception) {
             fail("import_jobs", jobId, "IMPORT_FAILED");
         }
+    }
+
+    private void failNow(String table, UUID jobId, String code) {
+        jdbc.update("UPDATE " + table + " SET status = 'failed', error_code = ?, finished_at = now() WHERE id = ?", code, jobId);
     }
 
     private void fail(String table, UUID jobId, String code) {

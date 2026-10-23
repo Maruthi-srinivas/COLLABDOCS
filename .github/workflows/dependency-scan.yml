@@ -1,0 +1,43 @@
+name: dependency-scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Maven dependency check
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e NVD_API_KEY maven:3.9-eclipse-temurin-21 \
+            sh -c 'extra=""; if [ -n "$NVD_API_KEY" ]; then extra="-DnvdApiKey=$NVD_API_KEY"; fi; mvn -f services/pom.xml org.owasp:dependency-check-maven:12.1.0:check -DfailBuildOnCVSS=7 -DassemblyAnalyzerEnabled=false $extra'
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+      - name: npm audit
+        run: |
+          exceptions="docs/05-security/EXCEPTIONS.md"
+          audit() {
+            name="$1"
+            dir="$2"
+            docker run --rm -v "$PWD/$dir:/app" -w /app node:22-alpine npm audit --omit=dev --json > "/tmp/audit-$name.json" || true
+            docker run --rm -v "$PWD:/src" -v /tmp:/tmp node:22-alpine node --input-type=module -e "
+              import fs from 'node:fs';
+              const report = JSON.parse(fs.readFileSync('/tmp/audit-$name.json', 'utf8'));
+              const vulns = report.vulnerabilities || {};
+              const exceptions = fs.existsSync('/src/$exceptions') ? fs.readFileSync('/src/$exceptions', 'utf8') : '';
+              const blocking = [];
+              for (const [pkg, item] of Object.entries(vulns)) {
+                if (item.severity !== 'high' && item.severity !== 'critical') continue;
+                if (!exceptions.includes(pkg) || !exceptions.toLowerCase().includes('review')) blocking.push(pkg + ' ' + item.severity);
+              }
+              if (blocking.length) {
+                console.error(blocking.join('\n'));
+                process.exit(1);
+              }
+            "
+          }
+          audit web services/web
+          audit compactor services/compactor

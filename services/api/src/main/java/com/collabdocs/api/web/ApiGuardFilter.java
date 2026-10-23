@@ -41,7 +41,7 @@ public class ApiGuardFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return path.startsWith("/health");
+        return path.startsWith("/health") || "/metrics".equals(path);
     }
 
     @Override

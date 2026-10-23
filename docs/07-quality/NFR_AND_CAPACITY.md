@@ -51,16 +51,18 @@ Availability excludes planned maintenance windows announced 24 hours ahead, capp
 
 Fifty editors in one document is a product cap enforced by rejecting the 51st editor socket with `4429` and a message to try later. Viewers count toward the cap.
 
-## 4. Assumptions used in the calculations
+## 4. Small-profile measurements
 
-- A-C1. An active editor produces 0.5 content updates per second on average while typing, 1 KB average update before base64.
-- A-C2. A typical document snapshot is 100 KB. A large document is 1 MB.
-- A-C3. 10% of registered users are monthly active. 10% of monthly active users are concurrent at peak. 2% of concurrent users are in the editor. The rest are browsing lists.
-- A-C4. Each open editor holds one WebSocket in V2.
-- A-C5. Updates are retained for 7 days after compaction. Snapshots retained under the version policy average 20 automatic snapshots per active document plus named ones. Planning uses 30 snapshots per document.
-- A-C6. PostgreSQL overhead and indexes add 50% on top of raw payload bytes.
-- A-C7. One export is 2 MB on average.
-- A-C8. These ratios are planning assumptions. Replace them with measurements after V2.
+Recorded on this workstation with the local Compose stack on 22 October 2026. The raw k6 summaries are [metadata-one.json](load/metadata-one.json), [updates-one.json](load/updates-one.json), and [updates-two.json](load/updates-two.json). The restore timing is [restore.txt](load/restore.txt). Sections 5 to 7 still use the earlier storage model (0.5 updates per second, 1 KB average update, 100 KB typical snapshot, 1 MB large snapshot, 10% monthly active, 10% of those concurrent, 2% of concurrent users editing, 7-day update retention, 30 snapshots per document, 50% index overhead, 2 MB average export). The k6 runs did not measure those distributions, and this version does not partition `collab_updates` or archive audit events.
+
+- A-C1. Metadata, one API replica, 50 virtual users, 30 seconds, `GET /documents/{id}`: p50 4.17 ms, p95 91.59 ms, p99 164.68 ms, error rate 0%. The NFR-PERF-001 target is 200 ms.
+- A-C2. Durable ack, one API replica, 10 virtual users, 30 seconds, 16 KB content update: p50 8.23 ms, p95 51.38 ms, p99 93.82 ms, error rate 0%. This meets NFR-PERF-005.
+- A-C3. The same ack workload through Nginx in front of two API replicas: p50 9.36 ms, p95 32.68 ms, p99 70.20 ms, error rate 0%. This meets the 500 ms p95 and 1% error-rate bar.
+- A-C4. These runs do not stand in for the 5,000-socket cap or a medium-hardware profile.
+- A-C5. The encrypted dump plus WAL restore opened the known document in 19 seconds. The medium RTO target stays 1,800 seconds.
+- A-C6. A client on gateway A and a client on gateway B received the same ordered update. A logged-out session was rejected on a new socket with close code 4401.
+- A-C7. `collabdocs_app` can read `audit_events` and an `UPDATE` of that table fails with permission denied. Development Compose still uses the single `collabdocs` user.
+- A-C8. An EICAR HTML import failed with `MALWARE_DETECTED`, left no document, and the stored object was removed.
 
 ## 5. Scenario definitions
 
@@ -166,7 +168,7 @@ Base64 on the wire multiplies payload size by about 4/3. Still under 2 MB/s down
 | Medium | 200 | 2 | 100 |
 | Large | 500 | 4 | 125 |
 
-The 5,000 socket rating per replica is headroom, not the planning load. Verify it with a connection test in V5 before raising the editor cap.
+The 5,000 socket rating per replica is headroom, not the planning load. V5 measured the small-profile ack runs above and did not run a 5,000-socket test.
 
 Memory budget: 200 KB per socket for buffers, 5,000 sockets = about 1 GB, plus JVM heap 1 GB. Gateway limit in Compose is 2 GB.
 
@@ -189,4 +191,4 @@ One worker completes a 20-page PDF in a target of 20 seconds single-flight (`G-7
 
 ## 12. Review cadence
 
-Replace A-C1 through A-C8 with measured distributions after V2 has real or load-test traffic. If update log growth exceeds the steady-state estimate by 2x for two weeks, shorten retention or lower the snapshot interval only with an ADR note, because shorter snapshots increase storage and longer intervals increase join tails.
+A-C1 through A-C8 cite the V5 small-profile runs. If update log growth exceeds the steady-state estimate by 2x for two weeks, shorten retention or lower the snapshot interval only with an ADR note, because shorter snapshots increase storage and longer intervals increase join tails.

@@ -35,7 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate Compose files
-        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml config
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml config
+          docker compose --env-file .env.example -f docker-compose.yml -f docker-compose.staging.yml config
         env:
           POSTGRES_DB: collabdocs
           POSTGRES_USER: collabdocs
@@ -44,3 +46,20 @@ jobs:
           MINIO_ROOT_PASSWORD: ci-only-not-a-secret
           INTERNAL_TOKEN: ci-only-not-a-secret
           ALLOWED_ORIGINS: http://localhost:8080
+
+  images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: docker compose --env-file .env.example -f docker-compose.yml build api collab worker compactor web
+      - name: Push images
+        if: env.REGISTRY_USER != ''
+        run: |
+          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+          docker compose --env-file .env.example -f docker-compose.yml push api collab worker compactor web
+        env:
+          REGISTRY: ${{ secrets.REGISTRY }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}

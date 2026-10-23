@@ -148,6 +148,11 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ status: "up" }));
       return;
     }
+    if (req.method === "GET" && url.pathname === "/metrics") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("db_up{service=\"compactor\"} 1\n");
+      return;
+    }
     if (!authorized(req)) {
       res.writeHead(401);
       res.end();
